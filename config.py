@@ -1,8 +1,8 @@
 """
-Konfigurationsverwaltung für plexname.
+Configuration management for plexname.
 
-Speichert API-Keys und Pfade in ~/.config/plexname/config.json.
-Beim ersten Start wird der Nutzer interaktiv nach den Werten gefragt.
+Stores API keys and paths in ~/.config/plexname/config.json.
+On first run, the user is prompted interactively for all values.
 """
 
 import json
@@ -17,11 +17,11 @@ REQUIRED_KEYS = ["omdb_api_key", "tmdb_token", "movie_path", "series_path"]
 
 def load_config():
     """
-    Liest die Konfiguration aus ~/.config/plexname/config.json.
+    Read configuration from ~/.config/plexname/config.json.
 
     Returns:
-        dict mit allen Konfigurationswerten, oder None falls die Datei
-        fehlt oder unvollständig ist.
+        dict with all config values, or None if the file is missing
+        or incomplete.
     """
     if not os.path.exists(CONFIG_PATH):
         return None
@@ -30,7 +30,6 @@ def load_config():
             cfg = json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
-    # Prüfen, ob alle Pflichtfelder vorhanden und nicht leer sind
     for key in REQUIRED_KEYS:
         if not cfg.get(key):
             return None
@@ -38,58 +37,57 @@ def load_config():
 
 
 def save_config(cfg):
-    """Speichert die Konfiguration und setzt restriktive Dateiberechtigungen."""
+    """Save configuration and set restrictive file permissions."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-    # Nur Besitzer darf lesen/schreiben (enthält API-Token)
+    # Owner read/write only (file contains API tokens)
     os.chmod(CONFIG_PATH, stat.S_IRUSR | stat.S_IWUSR)
 
 
 def run_setup():
     """
-    Interaktives Setup: fragt den Nutzer nach API-Keys und Pfaden.
+    Interactive setup: prompts the user for API keys and paths.
 
     Returns:
-        dict mit der vollständigen Konfiguration.
+        dict with the complete configuration.
     """
     print("=" * 50)
-    print("  🎬 plexname — Ersteinrichtung")
+    print("  🎬 plexname — First-time setup")
     print("=" * 50)
 
-    # Bestehende Konfiguration als Vorschlag laden
     existing = load_config() or {}
 
     # 1. OMDb API Key
     print()
-    print("1) OMDb API Key (für Film-Lookups via IMDb-ID)")
-    print("   Kostenlos erstellen: https://www.omdbapi.com/apikey.aspx")
-    print("   → 'FREE' wählen, E-Mail eingeben, Key kommt per Mail.")
+    print("1) OMDb API Key (for movie lookups via IMDb ID)")
+    print("   Get a free key: https://www.omdbapi.com/apikey.aspx")
+    print("   → Choose 'FREE', enter your email, key arrives by mail.")
     default = existing.get("omdb_api_key", "")
     omdb_key = _prompt_value("   API Key", default)
 
     # 2. TMDB Token
     print()
-    print("2) TMDB Read Access Token (für Titelsuche, Serien, Cast)")
-    print("   Account erstellen: https://www.themoviedb.org/signup")
-    print("   Token holen: https://www.themoviedb.org/settings/api")
-    print("   → Den langen 'API-Token für Lesezugriff' kopieren (nicht den kurzen API-Schlüssel).")
+    print("2) TMDB Read Access Token (for title search, TV shows, cast)")
+    print("   Create account: https://www.themoviedb.org/signup")
+    print("   Get token: https://www.themoviedb.org/settings/api")
+    print("   → Copy the long 'API Read Access Token' (not the short API key).")
     default = existing.get("tmdb_token", "")
     tmdb_token = _prompt_value("   Token", default)
 
-    # 3. Film-Pfad
+    # 3. Movie path
     print()
-    print("3) Plex-Filmordner (Stammverzeichnis der Filmbibliothek)")
-    print("   Beispiel: /Volumes/NAS/Filme oder /mnt/media/movies")
+    print("3) Plex movie folder (root of your movie library)")
+    print("   Example: /Volumes/NAS/Movies or /mnt/media/movies")
     default = existing.get("movie_path", "")
-    movie_path = _prompt_value("   Pfad", default)
+    movie_path = _prompt_value("   Path", default)
 
-    # 4. Serien-Pfad
+    # 4. Series path
     print()
-    print("4) Plex-Serienordner (Stammverzeichnis der Serienbibliothek)")
-    print("   Beispiel: /Volumes/NAS/Serien oder /mnt/media/tv")
+    print("4) Plex TV show folder (root of your series library)")
+    print("   Example: /Volumes/NAS/TV or /mnt/media/tv")
     default = existing.get("series_path", "")
-    series_path = _prompt_value("   Pfad", default)
+    series_path = _prompt_value("   Path", default)
 
     cfg = {
         "omdb_api_key": omdb_key,
@@ -100,36 +98,35 @@ def run_setup():
 
     save_config(cfg)
     print()
-    print(f"✅ Konfiguration gespeichert: {CONFIG_PATH}")
-    print("   Erneut einrichten: plexname setup")
+    print(f"✅ Configuration saved: {CONFIG_PATH}")
+    print("   Reconfigure anytime: plexname setup")
     print()
     return cfg
 
 
 def get_config():
     """
-    Lädt die Konfiguration. Startet das Setup, falls noch nicht eingerichtet.
+    Load configuration. Starts setup if not yet configured.
 
     Returns:
-        dict mit allen Konfigurationswerten.
+        dict with all config values.
     """
     cfg = load_config()
     if cfg is not None:
         return cfg
-    print("Noch nicht eingerichtet. Starte Setup...\n")
+    print("Not configured yet. Starting setup...\n")
     return run_setup()
 
 
 def _prompt_value(label, default=""):
-    """Fragt einen Wert ab, zeigt ggf. den bestehenden Wert als Vorschlag."""
+    """Prompt for a value, showing the existing value as a default if available."""
     if default:
-        # Kurze Vorschau für lange Tokens
         preview = default if len(default) <= 30 else default[:20] + "..." + default[-7:]
-        eingabe = input(f"{label} [{preview}]: ").strip()
-        return eingabe if eingabe else default
+        entry = input(f"{label} [{preview}]: ").strip()
+        return entry if entry else default
     else:
         while True:
-            eingabe = input(f"{label}: ").strip()
-            if eingabe:
-                return eingabe
-            print("   Eingabe erforderlich.")
+            entry = input(f"{label}: ").strip()
+            if entry:
+                return entry
+            print("   Input required.")

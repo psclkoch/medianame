@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "plexname"
 version = "1.0.0"
-description = "Plex-Ordner aus IMDb/TMDB erstellen"
+description = "Create Plex-compatible folders from IMDb/TMDB"
 requires-python = ">=3.9"
 dependencies = ["requests"]
 

@@ -1,21 +1,22 @@
 """
-Plex-Ordner aus IMDb-Links / TMDB erstellen.
+Create Plex-compatible folders from IMDb links / TMDB.
 
-Liest eine Textdatei mit IMDb-URLs (oder tt-IDs), fragt die OMDb-API nach
-Titel und Jahr ab und legt für jeden Film einen Plex-konformen Ordner an:
-    Filmname (Jahr) {imdb-ttXXXXXXXX}
+Reads a text file with IMDb URLs (or tt-IDs), queries the OMDb API for
+title and year, and creates Plex-compatible folders:
+    MovieTitle (Year) {imdb-ttXXXXXXXX}
 
-Serien werden über TMDB gesucht und als Plex-Ordner angelegt:
-    Serienname (Jahr) {tmdb-XXXXX}
+TV shows are looked up via TMDB and created as:
+    ShowTitle (Year) {tmdb-XXXXX}
 
-Verwendung:
-    python3 movie_fix.py                    # Ordner anlegen (aus filme.txt)
-    python3 movie_fix.py -n                 # Dry-Run (nur anzeigen, nichts ändern)
-    python3 movie_fix.py -i                 # Interaktiv: Dry-Run + Bestätigung → Ordner anlegen
-    python3 movie_fix.py -o /pfad/zu/filmen # Zielpfad überschreiben (gilt für Filme UND Serien)
-    python3 movie_fix.py -f andere.txt      # Andere Input-Datei verwenden
-    python3 movie_fix.py -p                 # Nach Filmen/Serien fragen (ohne filme.txt)
-    # Wenn filme.txt leer ist, wird automatisch nach Titeln gefragt.
+Usage:
+    plexname                        # Interactive mode (enter titles)
+    plexname <title>                # Direct search
+    plexname -n <title>             # Dry run (show only, no changes)
+    plexname -i <title>             # Interactive: dry run + confirmation
+    plexname -o /path/to/movies     # Override target path (movies + series)
+    plexname -f movies.txt          # Use a different input file
+    plexname -p                     # Prompt for titles (skip input file)
+    # When the input file is empty, prompt mode starts automatically.
 """
 
 import argparse
@@ -27,32 +28,32 @@ import time
 import requests
 
 
-# --- Konfiguration (wird beim Start aus ~/.config/plexname/config.json geladen) ---
+# --- Configuration (loaded at startup from ~/.config/plexname/config.json) ---
 
 API_KEY = None
 TMDB_TOKEN = None
-ZIEL_PFAD = None
-ZIEL_PFAD_SERIEN = None
-INPUT_DATEI = "filme.txt"
+MOVIE_PATH = None
+SERIES_PATH = None
+INPUT_FILE = "movies.txt"
 
 
 MAX_RETRIES = 3
-RETRY_DELAY = 2  # Sekunden zwischen Versuchen
+RETRY_DELAY = 2  # seconds between retries
 
-# Cache für bereits abgerufene Daten (vermeidet doppelte API-Calls)
+# Cache for fetched data (avoids duplicate API calls)
 _movie_cache = {}
 _tmdb_cache = {}
 
 
 def get_movie_data(imdb_id):
     """
-    Ruft Filmdaten von der OMDb-API ab (mit Retry bei temporären Fehlern).
+    Fetch movie data from the OMDb API (with retry on transient errors).
 
     Args:
-        imdb_id: IMDb-ID (z.B. tt0133093)
+        imdb_id: IMDb ID (e.g. tt0133093)
 
     Returns:
-        dict mit Title, Year etc. bei Erfolg, sonst None.
+        dict with Title, Year etc. on success, None otherwise.
     """
     if imdb_id in _movie_cache:
         return _movie_cache[imdb_id]
@@ -64,29 +65,29 @@ def get_movie_data(imdb_id):
             data = response.json()
             if data.get("Response") in ("True", "False"):
                 return data
-            last_error = data.get("Error", "Unbekannter API-Fehler")
+            last_error = data.get("Error", "Unknown API error")
             break
         except Exception as e:
             last_error = str(e)
             if attempt < MAX_RETRIES:
-                print(f"  ⚠️ Versuch {attempt}/{MAX_RETRIES} fehlgeschlagen, erneuter Versuch in {RETRY_DELAY}s...")
+                print(f"  ⚠️ Attempt {attempt}/{MAX_RETRIES} failed, retrying in {RETRY_DELAY}s...")
                 time.sleep(RETRY_DELAY)
             else:
-                print(f"Fehler bei {imdb_id} nach {MAX_RETRIES} Versuchen: {last_error}")
+                print(f"Error for {imdb_id} after {MAX_RETRIES} attempts: {last_error}")
                 return None
     return None
 
 
 def _tmdb_request(endpoint, params=None):
     """
-    Führt einen authentifizierten TMDB-API-Request aus.
+    Make an authenticated TMDB API request.
 
     Args:
-        endpoint: API-Pfad (z.B. /search/multi)
-        params: Query-Parameter als dict
+        endpoint: API path (e.g. /search/multi)
+        params: Query parameters as dict
 
     Returns:
-        JSON-Response als dict.
+        JSON response as dict.
     """
     url = f"https://api.themoviedb.org/3{endpoint}"
     headers = {
@@ -99,15 +100,15 @@ def _tmdb_request(endpoint, params=None):
 
 def get_tmdb_details(tmdb_id, media_type):
     """
-    Ruft Detail-Daten (Titel, Jahr, Cast) von TMDB ab.
+    Fetch detail data (title, year, cast) from TMDB.
 
     Args:
-        tmdb_id: TMDB-ID (z.B. 1396)
-        media_type: "tv" oder "movie"
+        tmdb_id: TMDB ID (e.g. 1396)
+        media_type: "tv" or "movie"
 
     Returns:
-        dict mit Response, Title, Year, Actors (und imdbID bei Filmen).
-        None bei Fehler.
+        dict with Response, Title, Year, Actors (and imdbID for movies).
+        None on error.
     """
     cache_key = f"{media_type}-{tmdb_id}"
     if cache_key in _tmdb_cache:
@@ -117,7 +118,7 @@ def get_tmdb_details(tmdb_id, media_type):
     try:
         data = _tmdb_request(endpoint, {"append_to_response": "credits"})
     except Exception as e:
-        print(f"  ❌ TMDB-Fehler: {e}")
+        print(f"  ❌ TMDB error: {e}")
         return None
 
     if "id" not in data:
@@ -142,7 +143,7 @@ def get_tmdb_details(tmdb_id, media_type):
             "imdbID": data.get("imdb_id", ""),
             "Actors": actors,
         }
-        # Movie-Cache befüllen, damit get_movie_data() den Film findet
+        # Populate movie cache so get_movie_data() finds it
         if result.get("imdbID"):
             _movie_cache[result["imdbID"]] = result
 
@@ -150,16 +151,15 @@ def get_tmdb_details(tmdb_id, media_type):
     return result
 
 
-def remove_processed_links_from_file(processed_imdb_ids, input_datei):
+def remove_processed_links(processed_ids, input_file):
     """
-    Entfernt die verarbeiteten IMDb-Links aus der Input-Datei.
-    Kommentarzeilen (#) und Leerzeilen bleiben erhalten.
-    Erstellt vor dem Überschreiben ein Backup (.bak), das dauerhaft
-    erhalten bleibt (manuelles Löschen möglich).
+    Remove processed IMDb links from the input file.
+    Comment lines (#) and blank lines are preserved.
+    Creates a backup (.bak) before overwriting.
     """
-    if not processed_imdb_ids or not os.path.exists(input_datei):
+    if not processed_ids or not os.path.exists(input_file):
         return
-    with open(input_datei, "r", encoding="utf-8") as f:
+    with open(input_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
     new_lines = []
     for line in lines:
@@ -168,47 +168,47 @@ def remove_processed_links_from_file(processed_imdb_ids, input_datei):
             new_lines.append(line)
             continue
         match = re.search(r"tt\d+", line)
-        if match and match.group() in processed_imdb_ids:
-            continue  # Diese Zeile (Link) entfernen
+        if match and match.group() in processed_ids:
+            continue  # Remove this line
         new_lines.append(line)
-    backup_path = input_datei + ".bak"
-    shutil.copy2(input_datei, backup_path)
-    with open(input_datei, "w", encoding="utf-8") as f:
+    backup_path = input_file + ".bak"
+    shutil.copy2(input_file, backup_path)
+    with open(input_file, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
-    print(f"📦 Backup gespeichert: {backup_path}")
-    print(f"🗑️ {len(processed_imdb_ids)} IMDb-Link(s) aus {input_datei} entfernt.")
+    print(f"📦 Backup saved: {backup_path}")
+    print(f"🗑️ {len(processed_ids)} IMDb link(s) removed from {input_file}.")
 
 
-def _can_write_to_path(pfad):
-    """Prüft, ob in den Zielpfad geschrieben werden kann."""
-    if not os.path.exists(pfad):
+def _can_write_to(path):
+    """Check if the target path is writable."""
+    if not os.path.exists(path):
         return False
-    return os.access(pfad, os.W_OK)
+    return os.access(path, os.W_OK)
 
 
 def _prompt_seasons(known_seasons=None):
     """
-    Fragt den Nutzer nach der Anzahl der Staffeln.
+    Ask the user how many seasons to create.
 
     Args:
-        known_seasons: Bekannte Staffelanzahl von TMDB (als Vorschlag).
+        known_seasons: Known season count from TMDB (used as suggestion).
 
     Returns:
-        Anzahl Staffeln (int), mindestens 1.
+        Number of seasons (int), at least 1.
     """
     if known_seasons:
-        prompt = f"  📺 Staffeln anlegen (TMDB: {known_seasons}, Enter = übernehmen): "
+        prompt = f"  📺 Seasons to create (TMDB: {known_seasons}, Enter = accept): "
     else:
-        prompt = "  📺 Wie viele Staffeln anlegen? "
+        prompt = "  📺 How many seasons to create? "
     try:
-        eingabe = input(prompt).strip()
+        user_input = input(prompt).strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return known_seasons or 1
-    if not eingabe and known_seasons:
+    if not user_input and known_seasons:
         return known_seasons
     try:
-        n = int(eingabe)
+        n = int(user_input)
         return max(1, n)
     except ValueError:
         if known_seasons:
@@ -218,67 +218,67 @@ def _prompt_seasons(known_seasons=None):
 
 def search_by_title(title):
     """
-    Sucht einen Film oder eine Serie per Titel über die TMDB-API.
+    Search for a movie or TV show by title via the TMDB API.
 
-    Stufe 1: Bester Treffer aus /search/multi mit Bestätigung
-             (Titel, Jahr, Typ, Cast).
-    Stufe 2: Bei Ablehnung nummerierte Liste der Top 5.
+    Stage 1: Best match from /search/multi with confirmation
+             (title, year, type, cast).
+    Stage 2: On rejection, numbered list of top 5 results.
 
     Args:
-        title: Suchbegriff (Film- oder Serientitel).
+        title: Search term (movie or show title).
 
     Returns:
-        Tuple (id, media_type, seasons) bei Erfolg:
-            - Film:  ("tt1375666", "movie", None)
-            - Serie: ("1396", "tv", 5)
-        None bei Fehler oder Abbruch.
+        Tuple (id, media_type, seasons) on success:
+            - Movie: ("tt1375666", "movie", None)
+            - TV:    ("1396", "tv", 5)
+        None on error or cancellation.
     """
     try:
         data = _tmdb_request("/search/multi", {"query": title})
     except Exception as e:
-        print(f"  ❌ Suchfehler: {e}")
+        print(f"  ❌ Search error: {e}")
         return None
 
     results = [r for r in data.get("results", [])
                if r.get("media_type") in ("movie", "tv")]
 
     if not results:
-        print(f"  ❌ Kein Ergebnis für \"{title}\".")
+        print(f"  ❌ No results for \"{title}\".")
         return None
 
-    # Stufe 1: Bester Treffer mit Details
+    # Stage 1: Best match with details
     best = results[0]
     tmdb_id = str(best["id"])
     media_type = best["media_type"]
 
     details = get_tmdb_details(tmdb_id, media_type)
     if details and details.get("Response") == "True":
-        typ_label = "Serie" if media_type == "tv" else "Film"
+        type_label = "TV Show" if media_type == "tv" else "Movie"
         actors = details.get("Actors", "N/A")
-        print(f"  🔍 {details['Title']} ({details['Year']}) — {typ_label} — mit {actors}")
+        print(f"  🔍 {details['Title']} ({details['Year']}) — {type_label} — starring {actors}")
         try:
-            antwort = input("     Korrekt? (Enter/n): ").strip().lower()
+            answer = input("     Correct? (Enter/n): ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return None
-        if antwort in ("", "j", "ja", "y", "yes"):
+        if answer in ("", "j", "ja", "y", "yes"):
             if media_type == "tv":
                 seasons = _prompt_seasons(details.get("Seasons"))
-                print(f"  ✅ tmdb-{tmdb_id} übernommen.")
+                print(f"  ✅ tmdb-{tmdb_id} confirmed.")
                 return (tmdb_id, "tv", seasons)
             else:
                 imdb_id = details.get("imdbID", "")
                 if not imdb_id:
-                    print("  ❌ Keine IMDb-ID für diesen Film gefunden.")
+                    print("  ❌ No IMDb ID found for this movie.")
                     return None
-                print(f"  ✅ {imdb_id} übernommen.")
+                print(f"  ✅ {imdb_id} confirmed.")
                 return (imdb_id, "movie", None)
 
-    # Stufe 2: Listensuche
+    # Stage 2: List search
     display_results = results[:5]
-    print(f"  Ergebnisse für \"{title}\":")
+    print(f"  Results for \"{title}\":")
     for i, r in enumerate(display_results, 1):
-        typ_label = "Serie" if r["media_type"] == "tv" else "Film"
+        type_label = "TV Show" if r["media_type"] == "tv" else "Movie"
         if r["media_type"] == "tv":
             name = r.get("name", "?")
             date = r.get("first_air_date", "")
@@ -286,18 +286,18 @@ def search_by_title(title):
             name = r.get("title", "?")
             date = r.get("release_date", "")
         year = date[:4] if date else "?"
-        print(f"    [{i}] {name} ({year}) — {typ_label}")
+        print(f"    [{i}] {name} ({year}) — {type_label}")
 
     try:
-        wahl = input("  Nummer wählen (oder leer = überspringen): ").strip()
+        choice = input("  Pick a number (or empty = skip): ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
         return None
 
-    if not wahl:
+    if not choice:
         return None
     try:
-        idx = int(wahl) - 1
+        idx = int(choice) - 1
         if 0 <= idx < len(display_results):
             chosen = display_results[idx]
             tmdb_id = str(chosen["id"])
@@ -306,45 +306,45 @@ def search_by_title(title):
             if details and details.get("Response") == "True":
                 if media_type == "tv":
                     seasons = _prompt_seasons(details.get("Seasons"))
-                    print(f"  ✅ tmdb-{tmdb_id} übernommen.")
+                    print(f"  ✅ tmdb-{tmdb_id} confirmed.")
                     return (tmdb_id, "tv", seasons)
                 else:
                     imdb_id = details.get("imdbID", "")
                     if imdb_id:
-                        print(f"  ✅ {imdb_id} übernommen.")
+                        print(f"  ✅ {imdb_id} confirmed.")
                         return (imdb_id, "movie", None)
-                    print("  ❌ Keine IMDb-ID für diesen Film gefunden.")
+                    print("  ❌ No IMDb ID found for this movie.")
         else:
-            print("  Ungültige Auswahl.")
+            print("  Invalid selection.")
     except ValueError:
-        print("  Ungültige Eingabe.")
+        print("  Invalid input.")
     return None
 
 
 def _prompt_for_links():
     """
-    Fragt den Nutzer interaktiv nach IMDb-URLs, TMDB-URLs oder Titeln.
-    Leere Eingabe beendet die Eingabe.
+    Interactively ask the user for IMDb URLs, TMDB URLs, or titles.
+    Empty input ends the prompt.
 
     Returns:
-        Liste von Tupeln (id, media_type, seasons):
-            - Film:  (imdb_id, "movie", None)
-            - Serie: (tmdb_id, "tv", 5)
+        List of tuples (id, media_type, seasons):
+            - Movie: (imdb_id, "movie", None)
+            - TV:    (tmdb_id, "tv", 5)
     """
-    print("IMDb-URL, TMDB-URL oder Titel eingeben (leere Zeile startet die Verarbeitung):")
+    print("Enter IMDb URL, TMDB URL, or title (empty line to start processing):")
     seen = set()
     entries = []
     while True:
         try:
-            eingabe = input("  > ").strip()
+            user_input = input("  > ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
-        if not eingabe:
+        if not user_input:
             break
 
-        # TMDB-URL erkennen: themoviedb.org/tv/1396-...
-        tmdb_match = re.search(r"themoviedb\.org/tv/(\d+)", eingabe)
+        # Detect TMDB URL: themoviedb.org/tv/1396-...
+        tmdb_match = re.search(r"themoviedb\.org/tv/(\d+)", user_input)
         if tmdb_match:
             tmdb_id = tmdb_match.group(1)
             key = f"tmdb-{tmdb_id}"
@@ -356,8 +356,8 @@ def _prompt_for_links():
                 entries.append((tmdb_id, "tv", seasons))
             continue
 
-        # IMDb-URL oder tt-ID erkennen
-        imdb_match = re.search(r"tt\d+", eingabe)
+        # Detect IMDb URL or tt-ID
+        imdb_match = re.search(r"tt\d+", user_input)
         if imdb_match:
             imdb_id = imdb_match.group()
             if imdb_id not in seen:
@@ -365,53 +365,49 @@ def _prompt_for_links():
                 entries.append((imdb_id, "movie", None))
             continue
 
-        # Eingabe als Titel interpretieren (Film oder Serie)
-        result = search_by_title(eingabe)
+        # Treat input as title search (movie or TV show)
+        result = search_by_title(user_input)
         if result:
             entry_id, media_type, seasons = result
             key = entry_id if media_type == "movie" else f"tmdb-{entry_id}"
             if key not in seen:
                 seen.add(key)
                 entries.append(result)
-                break  # Direkt zur Verarbeitung
+                break  # Proceed to processing
     return entries
 
 
-def process_list(dry_run=False, interactive=False, ziel_pfad=None, input_datei=None, prompt_mode=False, direct_title=None):
+def process_list(dry_run=False, interactive=False, output_path=None, input_file=None, prompt_mode=False, direct_title=None):
     """
-    Liest die Input-Datei (oder fragt interaktiv), dedupliziert IDs
-    und erstellt Plex-Ordner für Filme und Serien.
+    Read the input file (or prompt interactively), deduplicate IDs,
+    and create Plex folders for movies and TV shows.
 
     Args:
-        dry_run: Wenn True, werden keine Ordner angelegt, nur die
-                 geplanten Aktionen ausgegeben.
-        interactive: Wenn True, nach Dry-Run-Ausgabe Bestätigung abfragen
-                     und bei "j" die Ordner anlegen.
-        ziel_pfad: Überschreibt den Standard-Zielpfad (z.B. per -o).
-                   Gilt für Filme UND Serien.
-        input_datei: Überschreibt die Standard-Input-Datei (z.B. per -f).
-        prompt_mode: Wenn True, filme.txt wird nicht gelesen; stattdessen
-                     werden Titel/Links interaktiv abgefragt.
-        direct_title: Wenn gesetzt, wird direkt nach diesem Titel gesucht
-                      (z.B. "plexname breaking bad").
+        dry_run: If True, show planned actions without creating folders.
+        interactive: If True, show dry run then ask for confirmation.
+        output_path: Override the default target path (applies to movies and series).
+        input_file: Override the default input file.
+        prompt_mode: If True, skip the input file and prompt interactively.
+        direct_title: If set, search for this title directly
+                      (e.g. "plexname breaking bad").
     """
-    pfad = ziel_pfad if ziel_pfad is not None else ZIEL_PFAD
-    serien_pfad = ziel_pfad if ziel_pfad is not None else ZIEL_PFAD_SERIEN
-    datei = input_datei if input_datei is not None else INPUT_DATEI
+    movie_path = output_path if output_path is not None else MOVIE_PATH
+    series_path = output_path if output_path is not None else SERIES_PATH
+    file_path = input_file if input_file is not None else INPUT_FILE
     use_from_file = True
 
-    # Zielpfad prüfen (nur bei Datei-Modus ohne Dry-Run/Interaktiv)
+    # Check target path (only in file mode without dry run / interactive)
     if not dry_run and not interactive and not prompt_mode:
-        if not os.path.exists(pfad):
-            print(f"❌ ABBRUCH: Pfad '{pfad}' nicht gefunden. NAS verbunden?")
+        if not os.path.exists(movie_path):
+            print(f"❌ ABORT: Path '{movie_path}' not found. NAS connected?")
             return
-        if os.path.exists(pfad) and not _can_write_to_path(pfad):
-            print(f"❌ ABBRUCH: Keine Schreibrechte für '{pfad}'.")
+        if os.path.exists(movie_path) and not _can_write_to(movie_path):
+            print(f"❌ ABORT: No write permissions for '{movie_path}'.")
             return
 
     valid_count = 0
     if direct_title:
-        # Direktsuche: Titel wurde als Argument übergeben
+        # Direct search: title was passed as argument
         result = search_by_title(direct_title)
         if result:
             entries = [result]
@@ -422,11 +418,11 @@ def process_list(dry_run=False, interactive=False, ziel_pfad=None, input_datei=N
         entries = _prompt_for_links()
         use_from_file = False
     else:
-        if not os.path.exists(datei):
-            print(f"Datei {datei} nicht gefunden!")
+        if not os.path.exists(file_path):
+            print(f"File {file_path} not found!")
             return
 
-        with open(datei, "r", encoding="utf-8") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
         seen = set()
@@ -437,7 +433,7 @@ def process_list(dry_run=False, interactive=False, ziel_pfad=None, input_datei=N
                 continue
             match = re.search(r"tt\d+", line)
             if not match:
-                print(f"Ungültige URL übersprungen: {line}")
+                print(f"Invalid URL skipped: {line}")
                 continue
             valid_count += 1
             imdb_id = match.group()
@@ -450,17 +446,17 @@ def process_list(dry_run=False, interactive=False, ziel_pfad=None, input_datei=N
             use_from_file = False
 
     if not entries:
-        print("Keine Filme zum Verarbeiten.")
+        print("Nothing to process.")
         return
 
     if use_from_file and valid_count > len(entries):
-        print(f"ℹ️ {valid_count - len(entries)} Duplikate übersprungen → {len(entries)} eindeutige Filme")
+        print(f"ℹ️ {valid_count - len(entries)} duplicate(s) skipped → {len(entries)} unique entries")
 
-    mode = "Dry-Run" if (dry_run or interactive) else "Verarbeitung"
-    print(f"Starte {mode} von {len(entries)} Einträgen...")
+    mode = "Dry run" if (dry_run or interactive) else "Processing"
+    print(f"{mode}: {len(entries)} entries...")
 
-    to_create = []  # Bei interaktiv: (folder_name, full_path, seasons) Tupel
-    successfully_processed = set()  # IMDb-IDs für Datei-Bereinigung
+    to_create = []  # For interactive: (folder_name, full_path, seasons) tuples
+    successfully_processed = set()  # IMDb IDs for file cleanup
     count_created = 0
     count_existing = 0
     count_failed = 0
@@ -469,24 +465,24 @@ def process_list(dry_run=False, interactive=False, ziel_pfad=None, input_datei=N
         if len(entries) > 1:
             print(f"  [{idx}/{len(entries)}] ", end="")
 
-        # Daten abrufen und Zielpfad bestimmen
+        # Fetch data and determine target path
         if media_type == "tv":
             data = get_tmdb_details(entry_id, "tv")
             id_tag = f"tmdb-{entry_id}"
-            target_path = serien_pfad
+            target_path = series_path
         else:
             data = get_movie_data(entry_id)
             id_tag = f"imdb-{entry_id}"
-            target_path = pfad
+            target_path = movie_path
 
         if data and data.get("Response") == "True":
             title = data["Title"]
             year = data["Year"]
 
-            # Jahr: Bereich wie "1999–2000" auf erstes Jahr reduzieren
+            # Year range like "1999–2000" → use first year only
             year = str(year).split("–")[0].split("-")[0].strip()
 
-            # Ordnername: Sonderzeichen entfernen (/: etc. sind unter Windows/Unix ungültig)
+            # Folder name: remove invalid characters (/:*?"<>|\ etc.)
             clean_title = re.sub(r'[<>:"/\\|?*]', '', title)
             clean_year = re.sub(r'[<>:"/\\|?*]', '', year) or "0000"
             folder_name = f"{clean_title} ({clean_year}) {{{id_tag}}}"
@@ -498,7 +494,7 @@ def process_list(dry_run=False, interactive=False, ziel_pfad=None, input_datei=N
                 successfully_processed.add(entry_id)
 
             if dry_run or interactive:
-                status = "würde erstellt" if not exists else "existiert bereits"
+                status = "would create" if not exists else "already exists"
                 print(f"📋 {status}: {folder_name}")
                 if seasons:
                     for s in range(1, seasons + 1):
@@ -510,11 +506,11 @@ def process_list(dry_run=False, interactive=False, ziel_pfad=None, input_datei=N
                     count_existing += 1
             elif not exists:
                 if not os.path.exists(target_path):
-                    print(f"❌ Pfad '{target_path}' nicht gefunden. NAS verbunden?")
+                    print(f"❌ Path '{target_path}' not found. NAS connected?")
                     count_failed += 1
                     continue
                 os.makedirs(full_path)
-                print(f"✅ Erstellt: {folder_name}")
+                print(f"✅ Created: {folder_name}")
                 if seasons:
                     for s in range(1, seasons + 1):
                         season_path = os.path.join(full_path, f"Season {s:02d}")
@@ -522,145 +518,145 @@ def process_list(dry_run=False, interactive=False, ziel_pfad=None, input_datei=N
                         print(f"   ✅ Season {s:02d}")
                 count_created += 1
             else:
-                print(f"ℹ️ Existiert bereits: {folder_name}")
+                print(f"ℹ️ Already exists: {folder_name}")
                 count_existing += 1
         else:
-            print(f"❌ Fehler bei ID {entry_id}: {data.get('Error') if data else 'Keine Antwort'}")
+            print(f"❌ Error for ID {entry_id}: {data.get('Error') if data else 'No response'}")
             count_failed += 1
 
-        # Rate-Limiting: API nicht überlasten
+        # Rate limiting
         time.sleep(0.2)
 
-    # Zusammenfassung
+    # Summary
     summary_parts = []
     if count_created:
-        summary_parts.append(f"{count_created} erstellt")
+        summary_parts.append(f"{count_created} created")
     if count_existing:
-        summary_parts.append(f"{count_existing} existierten bereits")
+        summary_parts.append(f"{count_existing} already existed")
     if count_failed:
-        summary_parts.append(f"{count_failed} fehlgeschlagen")
+        summary_parts.append(f"{count_failed} failed")
     if summary_parts:
-        print(f"\n📊 Zusammenfassung: {', '.join(summary_parts)}")
+        print(f"\n📊 Summary: {', '.join(summary_parts)}")
 
-    # Normaler Modus: Links nach erfolgreicher Ordnererstellung aus Input-Datei entfernen
+    # Normal mode: remove processed links from input file
     if use_from_file and not dry_run and not interactive and successfully_processed:
-        remove_processed_links_from_file(successfully_processed, datei)
+        remove_processed_links(successfully_processed, file_path)
 
-    # Interaktiv: Nach Bestätigung Ordner anlegen (ohne erneute API-Aufrufe)
+    # Interactive: create folders after confirmation (no repeated API calls)
     if interactive and to_create:
         paths_needed = set(os.path.dirname(fp) for _, fp, _ in to_create)
         for p in paths_needed:
             if not os.path.exists(p):
-                print(f"❌ ABBRUCH: Pfad '{p}' nicht gefunden. NAS verbunden?")
+                print(f"❌ ABORT: Path '{p}' not found. NAS connected?")
                 return
-            if not _can_write_to_path(p):
-                print(f"❌ ABBRUCH: Keine Schreibrechte für '{p}'.")
+            if not _can_write_to(p):
+                print(f"❌ ABORT: No write permissions for '{p}'.")
                 return
-        antwort = input(f"\n{len(to_create)} Ordner anlegen? (j/n): ").strip().lower()
-        if antwort in ("j", "ja", "y", "yes"):
+        answer = input(f"\nCreate {len(to_create)} folder(s)? (y/n): ").strip().lower()
+        if answer in ("j", "ja", "y", "yes"):
             for folder_name, full_path, seasons in to_create:
                 os.makedirs(full_path)
-                print(f"✅ Erstellt: {folder_name}")
+                print(f"✅ Created: {folder_name}")
                 if seasons:
                     for s in range(1, seasons + 1):
                         season_path = os.path.join(full_path, f"Season {s:02d}")
                         os.makedirs(season_path)
                         print(f"   ✅ Season {s:02d}")
             if use_from_file and successfully_processed:
-                remove_processed_links_from_file(successfully_processed, datei)
+                remove_processed_links(successfully_processed, file_path)
         else:
-            print("Abgebrochen.")
+            print("Cancelled.")
 
 
 def _show_help():
-    """Zeigt eine ausführliche Hilfe an."""
-    movie_path = ZIEL_PFAD or "<nicht konfiguriert>"
-    series_path = ZIEL_PFAD_SERIEN or "<nicht konfiguriert>"
+    """Display detailed help text."""
+    movie_path = MOVIE_PATH or "<not configured>"
+    series_path = SERIES_PATH or "<not configured>"
     lines = [
-        "🎬 plexname — Plex-Ordner aus IMDb/TMDB erstellen",
+        "🎬 plexname — Create Plex-compatible folders from IMDb/TMDB",
         "",
-        "Verwendung:",
-        "  plexname                      Interaktiver Modus (Titel eingeben)",
-        "  plexname <titel>              Direktsuche (z.B. plexname breaking bad)",
-        "  plexname -n <titel>           Dry-Run: nur anzeigen, nichts anlegen",
-        "  plexname -i <titel>           Interaktiv: anzeigen, dann bestätigen",
-        "  plexname -f filme.txt         Filme aus Datei verarbeiten (IMDb-URLs)",
-        "  plexname -o /pfad <titel>     Zielpfad überschreiben (Filme + Serien)",
-        "  plexname setup                Konfiguration (neu) einrichten",
-        "  plexname help                 Diese Hilfe anzeigen",
+        "Usage:",
+        "  plexname                      Interactive mode (enter titles)",
+        "  plexname <title>              Direct search (e.g. plexname breaking bad)",
+        "  plexname -n <title>           Dry run: show what would be created",
+        "  plexname -i <title>           Interactive: show first, then confirm",
+        "  plexname -f movies.txt        Process IMDb URLs from file",
+        "  plexname -o /path <title>     Override target path (movies + series)",
+        "  plexname setup                (Re)configure API keys and paths",
+        "  plexname help                 Show this help",
         "",
-        "Eingabeformate:",
-        "  breaking bad                  Titelsuche (Film oder Serie via TMDB)",
-        "  https://imdb.com/title/tt...  IMDb-URL → Film",
-        "  tt1375666                     IMDb-ID → Film",
-        "  https://themoviedb.org/tv/... TMDB-URL → Serie",
+        "Input formats:",
+        "  breaking bad                  Title search (movies + TV via TMDB)",
+        "  https://imdb.com/title/tt...  IMDb URL → movie",
+        "  tt1375666                     IMDb ID → movie",
+        "  https://themoviedb.org/tv/... TMDB URL → TV show",
         "",
-        "Ordnerformat:",
-        f"  Filme:   Inception (2010) {{imdb-tt1375666}}      → {movie_path}",
-        f"  Serien:  Breaking Bad (2008) {{tmdb-1396}}         → {series_path}",
+        "Folder format:",
+        f"  Movies:  Inception (2010) {{imdb-tt1375666}}      → {movie_path}",
+        f"  Series:  Breaking Bad (2008) {{tmdb-1396}}         → {series_path}",
         "           └── Season 01, Season 02, ...",
     ]
     print("\n".join(lines))
 
 
 def _load_config():
-    """Lädt die Konfiguration und setzt die Modul-Globals."""
-    global API_KEY, TMDB_TOKEN, ZIEL_PFAD, ZIEL_PFAD_SERIEN
+    """Load configuration and set module globals."""
+    global API_KEY, TMDB_TOKEN, MOVIE_PATH, SERIES_PATH
     import config
     cfg = config.get_config()
     API_KEY = cfg["omdb_api_key"]
     TMDB_TOKEN = cfg["tmdb_token"]
-    ZIEL_PFAD = cfg["movie_path"]
-    ZIEL_PFAD_SERIEN = cfg["series_path"]
+    MOVIE_PATH = cfg["movie_path"]
+    SERIES_PATH = cfg["series_path"]
 
 
 def main():
     parser = argparse.ArgumentParser(
         prog="plexname",
-        description="Plex-Ordner aus IMDb-Links / TMDB erstellen",
+        description="Create Plex-compatible folders from IMDb/TMDB",
     )
-    parser.add_argument("title", nargs="*", help="Filmtitel oder Serienname (optional, startet Direktsuche)")
-    parser.add_argument("-n", "--dry-run", action="store_true", help="Zeigt nur, was erstellt würde (keine Änderungen)")
-    parser.add_argument("-i", "--interactive", action="store_true", help="Dry-Run, dann Bestätigung: Ordner anlegen? (j/n)")
-    parser.add_argument("-o", "--output", metavar="PFAD", help="Zielpfad für Plex-Ordner überschreiben")
-    parser.add_argument("-f", "--file", metavar="DATEI", dest="input_file", help="Alternative Input-Datei (Standard: filme.txt)")
-    parser.add_argument("-p", "--prompt", action="store_true", help="Nach Filmen/Serien fragen (ohne filme.txt)")
+    parser.add_argument("title", nargs="*", help="Movie or TV show title (starts direct search)")
+    parser.add_argument("-n", "--dry-run", action="store_true", help="Show what would be created (no changes)")
+    parser.add_argument("-i", "--interactive", action="store_true", help="Dry run, then confirm: create folders? (y/n)")
+    parser.add_argument("-o", "--output", metavar="PATH", help="Override target path for Plex folders")
+    parser.add_argument("-f", "--file", metavar="FILE", dest="input_file", help="Alternative input file (default: movies.txt)")
+    parser.add_argument("-p", "--prompt", action="store_true", help="Prompt for movies/series (skip input file)")
     args = parser.parse_args()
 
-    # Setup und Help vor dem Config-Laden abfangen
+    # Handle setup and help before loading config
     if args.title and args.title[0].lower() == "setup":
         import config
         config.run_setup()
         return
 
     if args.title and args.title[0].lower() == "help":
-        # Config laden falls vorhanden, aber kein Setup erzwingen
+        # Load config if available, but don't force setup
         import config
         cfg = config.load_config()
         if cfg:
-            global API_KEY, TMDB_TOKEN, ZIEL_PFAD, ZIEL_PFAD_SERIEN
-            ZIEL_PFAD = cfg["movie_path"]
-            ZIEL_PFAD_SERIEN = cfg["series_path"]
+            global MOVIE_PATH, SERIES_PATH
+            MOVIE_PATH = cfg["movie_path"]
+            SERIES_PATH = cfg["series_path"]
         _show_help()
         return
 
-    # Konfiguration laden (startet Setup beim ersten Mal)
+    # Load configuration (triggers setup on first run)
     _load_config()
 
     if args.title:
-        # Direktsuche: "plexname breaking bad" → Titel zusammenfügen
+        # Direct search: "plexname breaking bad" → join title words
         title = " ".join(args.title)
         process_list(dry_run=args.dry_run, interactive=args.interactive,
-                     ziel_pfad=args.output, input_datei=args.input_file,
+                     output_path=args.output, input_file=args.input_file,
                      prompt_mode=True, direct_title=title)
     elif args.input_file:
-        # Datei-Modus: nur wenn explizit -f angegeben
+        # File mode: only when -f is explicitly given
         process_list(dry_run=args.dry_run, interactive=args.interactive,
-                     ziel_pfad=args.output, input_datei=args.input_file)
+                     output_path=args.output, input_file=args.input_file)
     else:
-        # Ohne Argumente oder mit -p → interaktiver Prompt
+        # No arguments or -p → interactive prompt
         process_list(dry_run=args.dry_run, interactive=args.interactive,
-                     ziel_pfad=args.output, prompt_mode=True)
+                     output_path=args.output, prompt_mode=True)
 
 
 if __name__ == "__main__":
