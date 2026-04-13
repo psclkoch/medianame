@@ -5,4 +5,8 @@ dist/
 build/
 *.bak
 .DS_Store
+.venv/
+venv/
+config.json
 filme.txt
+movies.txt

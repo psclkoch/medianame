@@ -6,11 +6,30 @@ build-backend = "setuptools.build_meta"
 name = "plexname"
 version = "1.0.0"
 description = "Create Plex-compatible folders from IMDb/TMDB"
+readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "Pascal Koch"}]
+keywords = ["plex", "imdb", "tmdb", "media", "cli"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+]
 dependencies = ["requests"]
+
+[project.urls]
+Homepage = "https://github.com/psclkoch/plexname"
+Repository = "https://github.com/psclkoch/plexname"
+Issues = "https://github.com/psclkoch/plexname/issues"
 
 [tool.setuptools]
 py-modules = ["movie_fix", "config"]

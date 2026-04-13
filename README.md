@@ -1,5 +1,9 @@
 # plexname
 
+[![Tests](https://github.com/psclkoch/plexname/actions/workflows/tests.yml/badge.svg)](https://github.com/psclkoch/plexname/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+
 CLI tool to create [Plex](https://www.plex.tv/)-compatible folder structures for movies and TV shows.
 
 Search by title, confirm, done — plexname creates properly named folders with the correct metadata tags so Plex can match them automatically.
