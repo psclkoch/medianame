@@ -163,6 +163,22 @@ def run_setup():
     min_video_size_mb = _prompt_int("   Minimum size (MB)", default_min_mb,
                                      minimum=0)
 
+    # 10. Extra scan ignore entries (added to the built-in defaults like
+    #     #recycle, @eaDir, .Trash, System Volume Information, …)
+    print()
+    print("10) Extra folders/files to ignore during `scan`")
+    print("    Top-level entries matching these names are skipped entirely.")
+    print("    Defaults already cover: #recycle, @eaDir, .Trash, lost+found,")
+    print("    System Volume Information, $RECYCLE.BIN.")
+    print("    Add your own as comma-separated names (e.g. Hoerbuecher, ROMs, XXX).")
+    existing_extras = existing.get("scan_ignore", []) or []
+    default_extras = ", ".join(existing_extras) if existing_extras else ""
+    raw = input(f"    Extra ignores [{default_extras}]: ").strip()
+    if not raw:
+        scan_ignore = list(existing_extras)
+    else:
+        scan_ignore = [p.strip() for p in raw.split(",") if p.strip()]
+
     cfg = {
         "omdb_api_key": omdb_key,
         "tmdb_token": tmdb_token,
@@ -173,6 +189,7 @@ def run_setup():
         "series_id_source": series_id_source,
         "default_operation": default_operation,
         "min_video_size_mb": min_video_size_mb,
+        "scan_ignore": scan_ignore,
     }
 
     save_config(cfg)

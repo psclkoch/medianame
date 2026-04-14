@@ -41,6 +41,24 @@ SUBTITLE_EXTENSIONS = {".srt", ".ass", ".sub", ".idx", ".vtt"}
 MIN_VIDEO_SIZE_MB = 500
 MIN_VIDEO_BYTES = MIN_VIDEO_SIZE_MB * 1024 * 1024
 
+# Max folder recursion depth when collecting media files under a scan item.
+# Scene releases keep videos at depth 0-1; TV packs at depth 0-2 at most.
+SCAN_MAX_DEPTH = 2
+
+# Folders whose name matches one of these (case-insensitive, exact match)
+# are skipped entirely during scan. Users can extend this list via the
+# `scan_ignore` config field.
+DEFAULT_SCAN_IGNORE = {
+    "#recycle", "@eadir", ".trash", ".trashes", ".fseventsd",
+    ".spotlight-v100", ".ds_store", "lost+found",
+    "system volume information", "$recycle.bin", "recycle.bin",
+}
+SCAN_IGNORE = set(DEFAULT_SCAN_IGNORE)
+
+# Regex: folder names already containing a medianame ID tag are treated as
+# existing library entries and never re-scanned.
+_LIBRARY_TAG_RE = re.compile(r"\{(?:imdb|tmdb)-[^}]+\}|\[(?:imdbid|tmdbid)-[^\]]+\]")
+
 
 # --- Configuration (loaded at startup from ~/.config/plexname/config.json) ---
 
@@ -286,7 +304,7 @@ def _prompt_seasons(known_seasons=None):
         return 1
 
 
-def search_by_title(title):
+def search_by_title(title, year_hint=None):
     """
     Search for a movie or TV show by title via the TMDB API.
 
@@ -296,6 +314,9 @@ def search_by_title(title):
 
     Args:
         title: Search term (movie or show title).
+        year_hint: If given (int), results matching this year are ranked
+                   first (exact match, then ±1), before falling back to
+                   TMDB's own popularity order.
 
     Returns:
         Tuple (id, media_type, seasons) on success:
@@ -315,6 +336,24 @@ def search_by_title(title):
     if not results:
         print(f"  ❌ No results for \"{title}\".")
         return None
+
+    if year_hint:
+        def _year_of(r):
+            date = r.get("release_date") or r.get("first_air_date") or ""
+            try:
+                return int(date[:4])
+            except (ValueError, TypeError):
+                return None
+        exact, close, rest = [], [], []
+        for r in results:
+            y = _year_of(r)
+            if y == year_hint:
+                exact.append(r)
+            elif y is not None and abs(y - year_hint) == 1:
+                close.append(r)
+            else:
+                rest.append(r)
+        results = exact + close + rest
 
     # Stage 1: Best match with details
     best = results[0]
@@ -752,16 +791,19 @@ def _classify_media_file(path):
     return None
 
 
-def _collect_media_files(path):
+def _collect_media_files(path, max_depth=None):
     """
     Collect relevant media files from a path.
 
     If `path` is a single file, classify it. If it's a directory, walk
-    recursively, skipping hidden and "sample" subdirectories.
+    recursively up to `max_depth` levels deep (default SCAN_MAX_DEPTH),
+    skipping hidden, "sample", and SCAN_IGNORE subdirectories.
 
     Returns:
         list of (absolute_path, kind) tuples, where kind is "video" or "subtitle".
     """
+    if max_depth is None:
+        max_depth = SCAN_MAX_DEPTH
     results = []
     if os.path.isfile(path):
         kind = _classify_media_file(path)
@@ -770,11 +812,18 @@ def _collect_media_files(path):
         return results
     if not os.path.isdir(path):
         return results
+    base_depth = os.path.abspath(path).rstrip(os.sep).count(os.sep)
     for root, dirs, files in os.walk(path):
-        dirs[:] = sorted(
-            d for d in dirs
-            if not d.startswith(".") and "sample" not in d.lower()
-        )
+        current_depth = os.path.abspath(root).rstrip(os.sep).count(os.sep) - base_depth
+        if current_depth >= max_depth:
+            dirs[:] = []
+        else:
+            dirs[:] = sorted(
+                d for d in dirs
+                if not d.startswith(".")
+                and "sample" not in d.lower()
+                and d.lower() not in SCAN_IGNORE
+            )
         for fname in sorted(files):
             if fname.startswith("."):
                 continue
@@ -785,12 +834,35 @@ def _collect_media_files(path):
     return results
 
 
-def scan_source(source_path):
+def _is_library_folder(name):
+    """True if a folder name already carries a medianame ID tag."""
+    return bool(_LIBRARY_TAG_RE.search(name))
+
+
+def _should_skip_scan_entry(name):
+    """
+    Decide whether to skip a top-level entry by name alone
+    (no filesystem access).
+    """
+    if name.startswith("."):
+        return True
+    if name.lower() in SCAN_IGNORE:
+        return True
+    if _is_library_folder(name):
+        return True
+    return False
+
+
+def scan_source(source_path, max_age_days=0):
     """
     Scan `source_path` for media items.
 
     Each top-level entry (file or folder) is treated as one item. Items
-    without any qualifying media files are skipped.
+    without any qualifying media files are skipped, as are:
+      - hidden entries
+      - entries matching SCAN_IGNORE
+      - folders that already look like medianame library folders
+      - entries older than `max_age_days` (mtime-based), if > 0
 
     Returns:
         list of dicts with keys: source (path), name (basename),
@@ -799,11 +871,30 @@ def scan_source(source_path):
     if not os.path.isdir(source_path):
         print(f"❌ Scan source not found: {source_path}")
         return []
+    cutoff = None
+    if max_age_days and max_age_days > 0:
+        cutoff = time.time() - max_age_days * 86400
     items = []
+    skipped_ignored = 0
+    skipped_library = 0
+    skipped_old = 0
     for entry in sorted(os.listdir(source_path)):
         if entry.startswith("."):
             continue
+        if entry.lower() in SCAN_IGNORE:
+            skipped_ignored += 1
+            continue
+        if _is_library_folder(entry):
+            skipped_library += 1
+            continue
         full = os.path.join(source_path, entry)
+        if cutoff is not None:
+            try:
+                if os.path.getmtime(full) < cutoff:
+                    skipped_old += 1
+                    continue
+            except OSError:
+                continue
         media_files = _collect_media_files(full)
         if not media_files:
             continue
@@ -814,6 +905,15 @@ def scan_source(source_path):
             "parsed": parsed,
             "media_files": media_files,
         })
+    skip_notes = []
+    if skipped_library:
+        skip_notes.append(f"{skipped_library} already-named")
+    if skipped_ignored:
+        skip_notes.append(f"{skipped_ignored} on ignore list")
+    if skipped_old:
+        skip_notes.append(f"{skipped_old} older than {max_age_days}d")
+    if skip_notes:
+        print(f"ℹ️ Skipped: {', '.join(skip_notes)}")
     return items
 
 
@@ -853,11 +953,11 @@ def _resolve_scan_item(item, preset):
     if not title:
         print(f"  ⚠️ Could not parse title from: {item['name']}")
         return None
-    query = title
-    if parsed.get("year"):
-        query = f"{title} {parsed['year']}"
 
-    result = search_by_title(query)
+    # Pass year as a *hint* for re-ranking, not as part of the query string.
+    # TMDB's /search/multi treats extra words as title keywords, so
+    # "Boyz n the Hood 1991" returns zero results.
+    result = search_by_title(title, year_hint=parsed.get("year"))
     if not result:
         return None
     entry_id, media_type, seasons = result
@@ -1023,7 +1123,8 @@ def execute_scan_plan(plan, operation="move"):
     return counts
 
 
-def process_scan(source_path=None, operation=None, preset_override=None):
+def process_scan(source_path=None, operation=None, preset_override=None,
+                 max_age_days=0):
     """
     High-level entry point for `medianame scan`.
 
@@ -1031,6 +1132,8 @@ def process_scan(source_path=None, operation=None, preset_override=None):
         source_path: Folder to scan. If None, prompt the user.
         operation: "move" or "copy". If None, use configured default.
         preset_override: Naming preset override for this run.
+        max_age_days: If > 0, only consider top-level entries modified
+                      within the last N days.
     """
     if source_path is None:
         source_path = _choose_scan_source()
@@ -1045,7 +1148,9 @@ def process_scan(source_path=None, operation=None, preset_override=None):
     preset = preset_override or NAMING_PRESET
 
     print(f"🔍 Scanning: {source_path}")
-    items = scan_source(source_path)
+    if max_age_days and max_age_days > 0:
+        print(f"   (only entries modified in the last {max_age_days} day(s))")
+    items = scan_source(source_path, max_age_days=max_age_days)
     if not items:
         print("Nothing to process (no qualifying media files found).")
         return
@@ -1140,7 +1245,7 @@ def _load_config():
     """Load configuration and set module globals."""
     global API_KEY, TMDB_TOKEN, MOVIE_PATH, SERIES_PATH
     global NAMING_PRESET, MOVIE_ID_SOURCE, SERIES_ID_SOURCE, DEFAULT_OPERATION
-    global MIN_VIDEO_SIZE_MB, MIN_VIDEO_BYTES
+    global MIN_VIDEO_SIZE_MB, MIN_VIDEO_BYTES, SCAN_IGNORE
     import config
     cfg = config.get_config()
     API_KEY = cfg["omdb_api_key"]
@@ -1154,6 +1259,10 @@ def _load_config():
     DEFAULT_OPERATION = cfg.get("default_operation", "move")
     MIN_VIDEO_SIZE_MB = int(cfg.get("min_video_size_mb", 500))
     MIN_VIDEO_BYTES = MIN_VIDEO_SIZE_MB * 1024 * 1024
+    # Merge user extras onto the built-in defaults
+    extras = cfg.get("scan_ignore", []) or []
+    SCAN_IGNORE = set(DEFAULT_SCAN_IGNORE) | {str(e).strip().lower()
+                                               for e in extras if str(e).strip()}
 
 
 def main():
@@ -1170,6 +1279,8 @@ def main():
     parser.add_argument("--preset", choices=["plex", "jellyfin"], help="Override naming preset for this run")
     parser.add_argument("--copy", action="store_true", help="Scan only: copy instead of move")
     parser.add_argument("--move", action="store_true", help="Scan only: move instead of copy")
+    parser.add_argument("--max-age-days", type=int, default=0, metavar="N",
+                        help="Scan only: skip entries older than N days (default: no limit)")
     args = parser.parse_args()
 
     # Handle setup and help before loading config
@@ -1187,7 +1298,8 @@ def main():
             return
         operation = "copy" if args.copy else ("move" if args.move else None)
         process_scan(source_path=scan_path, operation=operation,
-                     preset_override=args.preset)
+                     preset_override=args.preset,
+                     max_age_days=args.max_age_days)
         return
 
     if args.title and args.title[0].lower() == "help":

@@ -79,6 +79,7 @@ Not configured yet. Starting setup...
 7) TV show ID source      (Jellyfin only — imdb / tmdb)
 8) Default operation for `scan` (move / copy)
 9) Minimum video size for `scan` (in MB, default 500)
+10) Extra scan ignores (comma-separated; defaults cover #recycle, @eaDir, …)
 
 ✅ Configuration saved: ~/.config/medianame/config.json
 ```
@@ -96,6 +97,7 @@ medianame -f movies.txt          # Batch mode — process IMDb URLs from a file
 medianame --preset jellyfin ...  # Override naming preset for this run
 medianame scan [<path>]          # Scan a folder and move raw media into named folders
 medianame scan --copy <path>     # Same, but copy instead of move
+medianame scan --max-age-days 7  # Only scan entries modified in the last 7 days
 medianame setup                  # (Re)configure API keys, paths, preset
 medianame help                   # Show detailed help
 ```
@@ -105,9 +107,10 @@ medianame help                   # Show detailed help
 If you already have raw downloads like `Goon.2011.2160p.BluRay.x265-RANSOM.mkv` or folders like `The.Knick.S01.1080p.REMUX-FraMeSToR/`, scan mode parses the release names, looks each title up on TMDB with confirmation, creates the correctly-named library folder, and moves (or copies) the relevant media files into it.
 
 ```bash
-medianame scan                   # Interactive: pick movie or series folder
-medianame scan ~/Downloads       # Scan a specific folder
-medianame scan --copy <path>     # Keep the source (default is move)
+medianame scan                         # Interactive: pick movie or series folder
+medianame scan ~/Downloads             # Scan a specific folder
+medianame scan --copy <path>           # Keep the source (default is move)
+medianame scan --max-age-days 7 <path> # Only look at entries modified in the last 7 days
 ```
 
 What gets picked up:
@@ -118,7 +121,17 @@ What gets picked up:
 - TV episodes land in `Season NN/` subfolders based on the parsed season number
 - If a destination file already exists, you're prompted per conflict: skip / overwrite / abort
 
+What is **automatically skipped** so scans on large library volumes stay fast:
+
+- Folders that already carry a medianame ID tag (`{imdb-…}`, `{tmdb-…}`, `[imdbid-…]`, `[tmdbid-…]`) — they're assumed to be processed
+- OS / NAS metadata: `#recycle`, `@eaDir`, `.Trash`, `lost+found`, `System Volume Information`, `$RECYCLE.BIN`, `.DS_Store`, …
+- Anything you add as an extra ignore (setup step 10) — useful for folders like `Hoerbuecher`, `ROMs`, `XXX`
+- Subfolders deeper than 2 levels inside a scan item (scene releases never nest deeper)
+- Optional: entries older than `--max-age-days N`, if you routinely drop new downloads into an already-populated library folder
+
 The default operation (`move` or `copy`) is set during `medianame setup` (step 8) and can be overridden per run with `--copy` / `--move`.
+
+> **Note on title matching.** TMDB search is driven only by the parsed title; the parsed year is used to re-rank results (preferring the matching year, then ±1). Appending the year to the query string would confuse TMDB's multi-search and return zero hits for otherwise obvious titles.
 
 ### Input formats
 

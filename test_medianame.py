@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -1279,6 +1280,97 @@ class TestScanFeature(unittest.TestCase):
         # Existing untouched
         with open(existing, "rb") as f:
             self.assertEqual(f.read(), b"existing")
+
+    # --- skip filters -------------------------------------------------------
+
+    def test_scan_skips_ignored_names(self):
+        # Two entries: one ignored, one kept
+        ignored = os.path.join(self.source_dir, "#recycle")
+        self._write_file(os.path.join(ignored, "junk.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        keep = os.path.join(self.source_dir, "Movie.2020")
+        self._write_file(os.path.join(keep, "Movie.2020.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        # #recycle is in DEFAULT_SCAN_IGNORE
+        items = medianame.scan_source(self.source_dir)
+        self.assertEqual([i["name"] for i in items], ["Movie.2020"])
+
+    def test_scan_skips_library_folders(self):
+        """Folders already tagged with {imdb-...} / [tmdbid-...] are skipped."""
+        done = os.path.join(self.source_dir, "Inception (2010) {imdb-tt1375666}")
+        self._write_file(os.path.join(done, "movie.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        done_jelly = os.path.join(self.source_dir,
+                                   "Tenet (2020) [imdbid-tt6723592]")
+        self._write_file(os.path.join(done_jelly, "movie.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        new = os.path.join(self.source_dir, "Raw.2024")
+        self._write_file(os.path.join(new, "Raw.2024.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        items = medianame.scan_source(self.source_dir)
+        self.assertEqual([i["name"] for i in items], ["Raw.2024"])
+
+    def test_is_library_folder_regex(self):
+        self.assertTrue(medianame._is_library_folder("Inception (2010) {imdb-tt1}"))
+        self.assertTrue(medianame._is_library_folder("Show (2020) {tmdb-1}"))
+        self.assertTrue(medianame._is_library_folder("Show (2020) [tmdbid-1]"))
+        self.assertTrue(medianame._is_library_folder("A (2020) [imdbid-tt9]"))
+        self.assertFalse(medianame._is_library_folder("Goon.2011.BluRay"))
+        self.assertFalse(medianame._is_library_folder("Filme"))
+
+    def test_scan_applies_max_age_days(self):
+        recent = os.path.join(self.source_dir, "Recent.2024")
+        self._write_file(os.path.join(recent, "Recent.2024.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        old = os.path.join(self.source_dir, "Old.2015")
+        self._write_file(os.path.join(old, "Old.2015.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        # Age `old` to 30 days ago
+        old_time = time.time() - 30 * 86400
+        os.utime(old, (old_time, old_time))
+        items = medianame.scan_source(self.source_dir, max_age_days=7)
+        self.assertEqual([i["name"] for i in items], ["Recent.2024"])
+
+    def test_collect_respects_depth_limit(self):
+        """At depth > max_depth, subdirectories are no longer walked."""
+        root = os.path.join(self.source_dir, "TopLevel")
+        # Videos at depth 0 and 1 are in-range for SCAN_MAX_DEPTH=2
+        self._write_file(os.path.join(root, "shallow.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        self._write_file(os.path.join(root, "sub", "mid.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        # Video nested too deep (depth 3+) is skipped
+        self._write_file(os.path.join(root, "a", "b", "c", "deep.mkv"),
+                         medianame.MIN_VIDEO_BYTES)
+        results = medianame._collect_media_files(root, max_depth=2)
+        names = sorted(os.path.basename(p) for p, _ in results)
+        self.assertIn("shallow.mkv", names)
+        self.assertIn("mid.mkv", names)
+        self.assertNotIn("deep.mkv", names)
+
+    # --- search_by_title year hint -----------------------------------------
+
+    def test_search_by_title_year_hint_reranks(self):
+        """When year_hint is passed, results matching the year come first."""
+        fake = {
+            "results": [
+                {"id": 2005, "media_type": "movie", "title": "Recycle",
+                 "release_date": "2005-01-01"},
+                {"id": 1993, "media_type": "movie", "title": "Re-Cycle",
+                 "release_date": "1993-01-01"},
+                {"id": 2019, "media_type": "movie", "title": "Re-Cycle",
+                 "release_date": "2019-01-01"},
+            ]
+        }
+        with patch("medianame._tmdb_request", return_value=fake), \
+             patch("medianame.get_tmdb_details",
+                   return_value={"Response": "True", "Title": "Re-Cycle",
+                                 "Year": "1993", "Actors": "X",
+                                 "imdbID": "tt0133093"}), \
+             patch("builtins.input", return_value=""):
+            result = medianame.search_by_title("recycle", year_hint=1993)
+        # Best match should be the 1993 one → we confirm and get its IMDb ID
+        self.assertEqual(result, ("tt0133093", "movie", None))
 
     def test_execute_plan_conflict_overwrite(self):
         src = os.path.join(self.source_dir, "Movie.mkv")
