@@ -74,8 +74,8 @@ Not configured yet. Starting setup...
 
 1) OMDb API Key (for movie lookups via IMDb ID)
 2) TMDB Read Access Token (for title search, TV shows, cast)
-3) Movie folder (root of your movie library)
-4) TV show folder (root of your series library)
+3) Movie working folder (library root, or a staging area — see step 12)
+4) TV show working folder (library root, or a staging area — see step 13)
 5) Media server (plex / jellyfin)
 6) Movie ID source        (Jellyfin only — imdb / tmdb)
 7) TV show ID source      (Jellyfin only — imdb / tmdb)

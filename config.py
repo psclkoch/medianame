@@ -110,15 +110,24 @@ def run_setup():
 
     # 3. Movie path
     print()
-    print("3) Plex movie folder (root of your movie library)")
-    print("   Example: /Volumes/NAS/Movies or /mnt/media/movies")
+    print("3) Movie working folder")
+    print("   Where new movie folders are created by medianame, and where")
+    print("   `medianame scan` looks for raw downloads to process.")
+    print("   This can either be your Plex/Jellyfin library root directly,")
+    print("   or a separate staging area — if you prefer to review folders")
+    print("   before they land in Plex, set a staging path here and configure")
+    print("   the actual library under step 12 (then `publish` moves things")
+    print("   over for you).")
+    print("   Example: /Volumes/NAS/Movies  or  ~/Downloads/staging/movies")
     default = existing.get("movie_path", "")
     movie_path = _prompt_value("   Path", default)
 
     # 4. Series path
     print()
-    print("4) TV show folder (root of your series library)")
-    print("   Example: /Volumes/NAS/TV or /mnt/media/tv")
+    print("4) TV show working folder")
+    print("   Same purpose as step 3, but for series. Either your library")
+    print("   root or a staging area (with the real library set in step 13).")
+    print("   Example: /Volumes/NAS/TV  or  ~/Downloads/staging/tv")
     default = existing.get("series_path", "")
     series_path = _prompt_value("   Path", default)
 
