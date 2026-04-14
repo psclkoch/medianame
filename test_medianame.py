@@ -2085,5 +2085,216 @@ class TestEndToEndScanPublish(unittest.TestCase):
             os.path.join(self.staging, expected_folder)))
 
 
+class TestNamecheck(unittest.TestCase):
+    """Tests for the v1.5.0 namecheck command."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.series_root = tempfile.mkdtemp()
+        self._orig = {
+            "MOVIE_PATH": medianame.MOVIE_PATH,
+            "SERIES_PATH": medianame.SERIES_PATH,
+            "TMDB_TOKEN": medianame.TMDB_TOKEN,
+        }
+        medianame.MOVIE_PATH = self.root
+        medianame.SERIES_PATH = self.series_root
+        medianame.TMDB_TOKEN = None  # disable TMDB calls unless patched
+        medianame._movie_cache.clear()
+        medianame._tmdb_cache.clear()
+
+    def tearDown(self):
+        for k, v in self._orig.items():
+            setattr(medianame, k, v)
+        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.series_root, ignore_errors=True)
+
+    def _mkfile(self, path, size=0):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            if size:
+                f.seek(size - 1)
+                f.write(b"\0")
+
+    def test_extract_id_from_tag_plex_imdb(self):
+        self.assertEqual(
+            medianame._extract_id_from_tag("Inception (2010) {imdb-tt1375666}"),
+            ("imdb", "tt1375666"))
+
+    def test_extract_id_from_tag_plex_tmdb(self):
+        self.assertEqual(
+            medianame._extract_id_from_tag("Breaking Bad (2008) {tmdb-1396}"),
+            ("tmdb", "1396"))
+
+    def test_extract_id_from_tag_jellyfin_imdbid(self):
+        self.assertEqual(
+            medianame._extract_id_from_tag("Inception (2010) [imdbid-tt1375666]"),
+            ("imdb", "tt1375666"))
+
+    def test_extract_id_from_tag_none(self):
+        self.assertEqual(
+            medianame._extract_id_from_tag("Send Help (2026)"),
+            (None, None))
+
+    def test_namecheck_missing_tag(self):
+        os.makedirs(os.path.join(self.root, "Some Movie (2020)"))
+        with patch("builtins.print") as mock_print:
+            medianame.process_namecheck(path=self.root)
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("Some Movie (2020)", output)
+        self.assertIn("no medianame ID tag", output)
+
+    def test_namecheck_orphan_subtitle(self):
+        folder = os.path.join(self.root, "Movie (2020) {imdb-tt1}")
+        os.makedirs(folder)
+        self._mkfile(os.path.join(folder, "Movie.mkv"), 1024)
+        self._mkfile(os.path.join(folder, "Other.ger.srt"), 100)
+        with patch("builtins.print") as mock_print:
+            medianame.process_namecheck(path=self.root)
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("Other.ger.srt", output)
+
+    def test_namecheck_paired_subtitle_not_orphan(self):
+        folder = os.path.join(self.root, "Movie (2020) {imdb-tt1}")
+        os.makedirs(folder)
+        self._mkfile(os.path.join(folder, "Movie.mkv"), 1024)
+        self._mkfile(os.path.join(folder, "Movie.ger.srt"), 100)
+        with patch("builtins.print") as mock_print:
+            medianame.process_namecheck(path=self.root)
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertNotIn("Movie.ger.srt", output)
+
+    def test_namecheck_incomplete_season(self):
+        # Series root with a TV show missing episodes
+        show = os.path.join(self.series_root,
+                             "Breaking Bad (2008) {tmdb-1396}")
+        os.makedirs(os.path.join(show, "Season 01"))
+        # Only 3 episodes exist; TMDB says 7
+        for i in range(1, 4):
+            self._mkfile(os.path.join(show, "Season 01", f"ep{i}.mkv"), 1024)
+        medianame.TMDB_TOKEN = "fake"  # so season lookup path runs
+        with patch("medianame._tmdb_request",
+                   return_value={"seasons": [
+                       {"season_number": 0, "episode_count": 2},  # specials
+                       {"season_number": 1, "episode_count": 7},
+                   ]}):
+            with patch("builtins.print") as mock_print:
+                medianame.process_namecheck(path=self.series_root)
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("Season 01", output)
+        self.assertIn("missing 4", output)
+
+    def test_namecheck_duplicate_ids(self):
+        os.makedirs(os.path.join(self.root, "Movie A (2020) {imdb-tt1}"))
+        os.makedirs(os.path.join(self.root, "Movie A copy (2020) {imdb-tt1}"))
+        with patch("builtins.print") as mock_print:
+            medianame.process_namecheck(path=self.root)
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("Duplicate IDs", output)
+        self.assertIn("imdb-tt1", output)
+
+    def test_namecheck_clean_library_reports_no_issues(self):
+        folder = os.path.join(self.root, "Movie (2020) {imdb-tt1}")
+        os.makedirs(folder)
+        self._mkfile(os.path.join(folder, "Movie.mkv"), 1024)
+        self._mkfile(os.path.join(folder, "Movie.ger.srt"), 100)
+        with patch("builtins.print") as mock_print:
+            medianame.process_namecheck(path=self.root)
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("all clean", output)
+
+
+class TestHealthcheck(unittest.TestCase):
+    """Tests for the v1.5.0 healthcheck command."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_healthcheck_no_config(self):
+        with patch("config.load_config", return_value=None):
+            with patch("builtins.print") as mock_print:
+                medianame.process_healthcheck()
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("Cannot proceed", output)
+
+    def test_healthcheck_all_green(self):
+        cfg = {
+            "tmdb_token": "fake",
+            "movie_path": self.tmp,
+            "series_path": self.tmp,
+            "movie_library_path": "",
+            "series_library_path": "",
+        }
+        with patch("config.load_config", return_value=cfg), \
+             patch("medianame._tmdb_request",
+                   return_value={"images": {}}):
+            with patch("builtins.print") as mock_print:
+                medianame.process_healthcheck()
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("TMDB token", output)
+        self.assertIn("Movie working folder", output)
+        # Two warnings for the optional, unconfigured library paths.
+        self.assertIn("All critical checks passed", output)
+
+    def test_healthcheck_bad_tmdb_token(self):
+        cfg = {
+            "tmdb_token": "bogus",
+            "movie_path": self.tmp,
+            "series_path": self.tmp,
+        }
+        with patch("config.load_config", return_value=cfg), \
+             patch("medianame._tmdb_request",
+                   side_effect=Exception("401 Unauthorized")):
+            with patch("builtins.print") as mock_print:
+                medianame.process_healthcheck()
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("TMDB token", output)
+        self.assertIn("request failed", output)
+        self.assertIn("failed", output)
+
+    def test_healthcheck_missing_path(self):
+        cfg = {
+            "tmdb_token": "fake",
+            "movie_path": "/nonexistent/definitely/not/here",
+            "series_path": self.tmp,
+        }
+        with patch("config.load_config", return_value=cfg), \
+             patch("medianame._tmdb_request",
+                   return_value={"images": {}}):
+            with patch("builtins.print") as mock_print:
+                medianame.process_healthcheck()
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("missing:", output)
+
+    def test_healthcheck_flags_legacy_omdb_key(self):
+        cfg = {
+            "tmdb_token": "fake",
+            "movie_path": self.tmp,
+            "series_path": self.tmp,
+            "omdb_api_key": "old-value",
+        }
+        with patch("config.load_config", return_value=cfg), \
+             patch("medianame._tmdb_request",
+                   return_value={"images": {}}):
+            with patch("builtins.print") as mock_print:
+                medianame.process_healthcheck()
+        output = "\n".join(str(c.args[0]) for c in mock_print.call_args_list
+                           if c.args)
+        self.assertIn("Legacy", output)
+        self.assertIn("omdb_api_key", output)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

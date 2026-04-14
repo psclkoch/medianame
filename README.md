@@ -104,6 +104,8 @@ medianame scan --copy <path>     # Same, but copy instead of move
 medianame scan --max-age-days 7  # Only scan entries modified in the last 7 days
 medianame scan --no-publish      # Scan without the auto-publish step this run
 medianame publish [<path>]       # Move finished folders into your Plex/Jellyfin library
+medianame namecheck [<path>]     # Read-only audit of an existing library
+medianame healthcheck            # Verify config, TMDB token, paths, deps
 medianame setup                  # (Re)configure API keys, paths, preset
 medianame help                   # Show detailed help
 ```
@@ -184,6 +186,28 @@ Only folders carrying a medianame ID tag (`{imdb-…}`, `{tmdb-…}`, `[imdbid-�
 
 **Staging cleanup.** After a successful publish, the staging folder is removed if empty. If some files stayed behind (skipped conflicts, leftover `.nfo` files, samples) you get a summary listing and a prompt whether to delete anyway.
 
+### Library audit (v1.5.0+)
+
+Two read-only commands help you keep an existing library clean without touching any files:
+
+**`medianame namecheck [<path>]`** — audit one or both library roots and flag folders that don't follow medianame conventions. When no path is given, both configured library roots are scanned. Reports:
+
+- Folders without a medianame ID tag (`Inception (2010)` with no `{imdb-…}` / `[imdbid-…]`)
+- TV seasons whose episode count doesn't match TMDB (missing episodes)
+- Orphan subtitle files (`.srt` with no matching video in the same folder)
+- Duplicate IDs — the same `tt…` / TMDB ID appearing in two folders
+
+**`medianame healthcheck`** — smoke-test your installation:
+
+- Config file present and parseable
+- TMDB token accepted by the API
+- Configured paths exist and are writable
+- Optional library paths (when set)
+- `guessit` dependency importable
+- Legacy `omdb_api_key` detected (v1.4.0+ ignores it)
+
+Use this right after `medianame setup` to verify everything is wired up, or to diagnose problems before filing a bug report.
+
 ### Input formats
 
 In interactive mode, you can enter:
@@ -239,6 +263,7 @@ New config fields introduced in later versions fall back to sensible defaults �
 - v1.2.2 — `scan_max_age_days`
 - v1.3.0 — `movie_library_path`, `series_library_path` (optional publish targets)
 - v1.4.0 — OMDb API is no longer used; the legacy `omdb_api_key` in existing configs is ignored and can be removed
+- v1.5.0 — no new config fields; adds `namecheck` + `healthcheck` commands
 
 ### From plexname (v1.0)
 

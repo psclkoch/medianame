@@ -2399,7 +2399,13 @@ def _show_help():
         "                                 Scan: only entries modified in the last N days",
         "  medianame scan --no-publish    Scan: skip publish step this run",
         "  medianame publish [<path>]     Move tag-named folders into the",
-        "                                 configured library (setup 12/13).",
+        "                                 configured library (setup 11/12).",
+        "  medianame namecheck [<path>]   Read-only audit: flag folders with",
+        "                                 missing/malformed ID tags, TV",
+        "                                 seasons with missing episodes,",
+        "                                 orphan subtitles, duplicate IDs.",
+        "  medianame healthcheck          Verify setup: config, TMDB token,",
+        "                                 paths, dependencies.",
         "  medianame setup                (Re)configure API keys, paths, preset",
         "  medianame help                 Show this help",
         "",
@@ -2446,6 +2452,361 @@ def _load_config():
     # Optional library paths (empty string = disabled)
     MOVIE_LIBRARY_PATH = cfg.get("movie_library_path") or None
     SERIES_LIBRARY_PATH = cfg.get("series_library_path") or None
+
+
+# ===========================================================================
+# namecheck — read-only audit of an existing library. Reports folders with
+# missing/malformed ID tags, TV seasons with missing episodes (via TMDB),
+# orphan subtitle files, and duplicate IDs. Does not modify anything.
+# ===========================================================================
+
+_TAG_CONTENT_RE = re.compile(
+    r"[{\[](?P<kind>imdbid|tmdbid|imdb|tmdb)-(?P<val>[^}\]]+)[}\]]"
+)
+
+
+def _extract_id_from_tag(folder_name):
+    """
+    Return ("imdb"|"tmdb", id_value) if `folder_name` carries a medianame
+    tag, else (None, None).
+    """
+    m = _TAG_CONTENT_RE.search(folder_name)
+    if not m:
+        return (None, None)
+    kind = m.group("kind")
+    id_type = "imdb" if kind.startswith("imdb") else "tmdb"
+    return (id_type, m.group("val"))
+
+
+def _tmdb_season_episode_counts(tmdb_id):
+    """
+    Return {season_number: episode_count, …} for a TV show, or None on error.
+    Specials (season 0) are excluded.
+    """
+    try:
+        data = _tmdb_request(f"/tv/{tmdb_id}")
+    except Exception:
+        return None
+    seasons = data.get("seasons") or []
+    result = {}
+    for s in seasons:
+        num = s.get("season_number")
+        ep = s.get("episode_count")
+        if num is None or num == 0 or ep is None:
+            continue
+        result[int(num)] = int(ep)
+    return result
+
+
+def _count_season_episodes(season_dir):
+    """Count video files directly inside a Season NN folder."""
+    try:
+        entries = os.listdir(season_dir)
+    except OSError:
+        return 0
+    return sum(
+        1 for e in entries
+        if os.path.isfile(os.path.join(season_dir, e))
+        and os.path.splitext(e)[1].lower() in VIDEO_EXTENSIONS
+    )
+
+
+def _find_orphan_subtitles(folder_path):
+    """
+    Return a list of subtitle filenames (basename only) that have no
+    video counterpart in the same folder — i.e. no video file shares
+    the subtitle's base stem prefix.
+    """
+    try:
+        entries = os.listdir(folder_path)
+    except OSError:
+        return []
+    videos = [e for e in entries
+              if os.path.isfile(os.path.join(folder_path, e))
+              and os.path.splitext(e)[1].lower() in VIDEO_EXTENSIONS]
+    if not videos:
+        # No videos at all → can't judge orphan-ness here (maybe TV root)
+        return []
+    video_stems = [os.path.splitext(v)[0] for v in videos]
+    orphans = []
+    for e in entries:
+        full = os.path.join(folder_path, e)
+        if not os.path.isfile(full):
+            continue
+        ext = os.path.splitext(e)[1].lower()
+        if ext not in SUBTITLE_EXTENSIONS:
+            continue
+        sub_stem = os.path.splitext(e)[0]
+        # Subtitle "Movie.ger.srt" pairs with "Movie.mkv" — prefix match
+        if not any(sub_stem == v or sub_stem.startswith(v + ".")
+                   for v in video_stems):
+            orphans.append(e)
+    return orphans
+
+
+def _namecheck_folder(folder_path, folder_name, is_tv_root):
+    """
+    Audit one top-level library folder. Returns a list of finding dicts.
+    Each finding: {"kind": str, "detail": str}.
+    """
+    findings = []
+    id_type, id_value = _extract_id_from_tag(folder_name)
+    if not id_type:
+        findings.append({"kind": "missing-tag",
+                         "detail": "no medianame ID tag found"})
+
+    # Orphan subtitles (movie folder: check root; TV: check each season)
+    if is_tv_root:
+        try:
+            subs = [s for s in os.listdir(folder_path)
+                    if os.path.isdir(os.path.join(folder_path, s))
+                    and _SEASON_DIR_RE.match(s)]
+        except OSError:
+            subs = []
+        # TV: season-completeness check requires TMDB + known tmdb id
+        tmdb_counts = None
+        if id_type and TMDB_TOKEN:
+            tmdb_id = id_value
+            if id_type == "imdb":
+                try:
+                    tmdb_id = get_tmdb_id_from_imdb(id_value, "tv")
+                except Exception:
+                    tmdb_id = None
+            if tmdb_id:
+                tmdb_counts = _tmdb_season_episode_counts(tmdb_id)
+
+        for season in sorted(subs):
+            season_path = os.path.join(folder_path, season)
+            m = _SEASON_DIR_RE.match(season)
+            season_num = int(m.group(1)) if m else None
+            found = _count_season_episodes(season_path)
+            if tmdb_counts is not None and season_num in tmdb_counts:
+                expected = tmdb_counts[season_num]
+                if found < expected:
+                    findings.append({
+                        "kind": "incomplete-season",
+                        "detail": f"{season}: {found} episode(s), "
+                                  f"TMDB reports {expected} "
+                                  f"(missing {expected - found})",
+                    })
+            orphans = _find_orphan_subtitles(season_path)
+            for o in orphans:
+                findings.append({"kind": "orphan-subtitle",
+                                 "detail": f"{season}/{o} (no matching video)"})
+    else:
+        orphans = _find_orphan_subtitles(folder_path)
+        for o in orphans:
+            findings.append({"kind": "orphan-subtitle",
+                             "detail": f"{o} (no matching video)"})
+    return findings
+
+
+def _iter_namecheck_roots(explicit_path):
+    """
+    Decide which root folder(s) to scan. Returns a list of
+    (path, is_tv) tuples. Explicit path → auto-detect type from content;
+    else scan both configured paths.
+    """
+    if explicit_path:
+        # Heuristic: if any immediate subfolder contains a Season NN/ folder,
+        # treat as TV root; else movie root. Cheap and good enough.
+        is_tv = False
+        try:
+            for entry in os.listdir(explicit_path):
+                sub = os.path.join(explicit_path, entry)
+                if not os.path.isdir(sub):
+                    continue
+                try:
+                    children = os.listdir(sub)
+                except OSError:
+                    continue
+                if any(_SEASON_DIR_RE.match(c) for c in children):
+                    is_tv = True
+                    break
+        except OSError:
+            pass
+        return [(explicit_path, is_tv)]
+    roots = []
+    if MOVIE_PATH and os.path.isdir(MOVIE_PATH):
+        roots.append((MOVIE_PATH, False))
+    if (SERIES_PATH and SERIES_PATH != MOVIE_PATH
+            and os.path.isdir(SERIES_PATH)):
+        roots.append((SERIES_PATH, True))
+    return roots
+
+
+def process_namecheck(path=None):
+    """
+    Read-only audit of an existing library. Prints a report listing
+    folders with naming issues. Nothing is modified.
+    """
+    roots = _iter_namecheck_roots(path)
+    if not roots:
+        print("❌ No folder to scan. Configure movie_path / series_path "
+              "or pass a path explicitly.")
+        return
+
+    total_folders = 0
+    total_findings = 0
+    duplicate_ids = {}
+
+    for root, is_tv in roots:
+        kind_label = "TV" if is_tv else "Movies"
+        print(f"🔍 Namecheck: {root}   ({kind_label})")
+        try:
+            entries = sorted(os.listdir(root))
+        except OSError as e:
+            print(f"  ❌ Cannot read: {e}")
+            continue
+
+        folder_reports = []  # (name, findings)
+        for name in entries:
+            full = os.path.join(root, name)
+            if not os.path.isdir(full) or name.startswith("."):
+                continue
+            total_folders += 1
+            id_type, id_value = _extract_id_from_tag(name)
+            if id_type:
+                key = f"{id_type}-{id_value}"
+                duplicate_ids.setdefault(key, []).append(
+                    os.path.relpath(full, root))
+            findings = _namecheck_folder(full, name, is_tv)
+            if findings:
+                folder_reports.append((name, findings))
+                total_findings += len(findings)
+
+        if folder_reports:
+            print()
+            for name, findings in folder_reports:
+                print(f" 📁 {name}")
+                for f in findings:
+                    print(f"    └─ {f['detail']}")
+        print()
+
+    # Cross-root duplicate IDs
+    dups = {k: v for k, v in duplicate_ids.items() if len(v) > 1}
+    if dups:
+        print("⚠️  Duplicate IDs across folders:")
+        for key, paths in sorted(dups.items()):
+            print(f"   {key}:")
+            for p in paths:
+                print(f"     - {p}")
+            total_findings += len(paths) - 1
+        print()
+
+    if total_findings == 0:
+        print(f"✅ {total_folders} folder(s) checked — all clean.")
+    else:
+        print(f"⚠️  {total_findings} issue(s) across "
+              f"{total_folders} folder(s) checked.")
+
+
+# ===========================================================================
+# healthcheck — verify the installation is sane: config readable, TMDB
+# token works, paths exist and are writable, dependencies importable.
+# ===========================================================================
+
+def _hc_row(status, label, detail=""):
+    icon = {"ok": "✅", "warn": "⚠️ ", "fail": "❌"}.get(status, "  ")
+    tail = f" — {detail}" if detail else ""
+    print(f" {icon} {label}{tail}")
+
+
+def _hc_check_path(label, path, required=True):
+    if not path:
+        if required:
+            _hc_row("fail", label, "not configured")
+            return "fail"
+        _hc_row("warn", label, "not configured (optional)")
+        return "warn"
+    if not os.path.isdir(path):
+        _hc_row("fail", label, f"missing: {path}")
+        return "fail"
+    if not os.access(path, os.W_OK):
+        _hc_row("fail", label, f"not writable: {path}")
+        return "fail"
+    _hc_row("ok", label, path)
+    return "ok"
+
+
+def process_healthcheck():
+    """
+    Run a series of environment checks and print a verdict. Exits
+    without side effects. Intended as a self-test after setup or for
+    support diagnostics.
+    """
+    import config
+    print("🩺 medianame healthcheck")
+    print()
+
+    statuses = []
+    # Config file
+    cfg = config.load_config()
+    if cfg is None:
+        _hc_row("fail", "Config file",
+                f"{config.CONFIG_PATH} missing or invalid")
+        print()
+        print("❌ Cannot proceed — run `medianame setup`.")
+        return
+    _hc_row("ok", "Config file", config.CONFIG_PATH)
+    statuses.append("ok")
+
+    # Prime TMDB token into module global so _tmdb_request() can use it
+    global TMDB_TOKEN
+    TMDB_TOKEN = cfg.get("tmdb_token")
+
+    # TMDB token: tiny round-trip call
+    try:
+        data = _tmdb_request("/configuration")
+        if data and "images" in data:
+            _hc_row("ok", "TMDB token", "API reachable, token accepted")
+            statuses.append("ok")
+        else:
+            _hc_row("fail", "TMDB token",
+                    "unexpected response from /configuration")
+            statuses.append("fail")
+    except Exception as e:
+        _hc_row("fail", "TMDB token", f"request failed ({e})")
+        statuses.append("fail")
+
+    # Working paths
+    statuses.append(_hc_check_path("Movie working folder",
+                                    cfg.get("movie_path"), required=True))
+    statuses.append(_hc_check_path("TV working folder",
+                                    cfg.get("series_path"), required=True))
+    # Library paths (optional)
+    statuses.append(_hc_check_path("Movie library folder",
+                                    cfg.get("movie_library_path") or "",
+                                    required=False))
+    statuses.append(_hc_check_path("TV library folder",
+                                    cfg.get("series_library_path") or "",
+                                    required=False))
+
+    # Dependencies
+    try:
+        import guessit  # noqa: F401
+        ver = getattr(guessit, "__version__", "unknown")
+        _hc_row("ok", "guessit", f"installed ({ver})")
+        statuses.append("ok")
+    except ImportError:
+        _hc_row("fail", "guessit", "missing — reinstall medianame")
+        statuses.append("fail")
+
+    # Legacy OMDb key still in config?
+    if cfg.get("omdb_api_key"):
+        _hc_row("warn", "Legacy `omdb_api_key`",
+                "ignored since v1.4.0 — can be removed from config.json")
+        statuses.append("warn")
+
+    fails = statuses.count("fail")
+    warns = statuses.count("warn")
+    print()
+    if fails:
+        print(f"❌ {fails} check(s) failed, {warns} warning(s).")
+    elif warns:
+        print(f"✅ All critical checks passed ({warns} warning(s)).")
+    else:
+        print(f"✅ All {len(statuses)} checks passed.")
 
 
 def main():
@@ -2499,6 +2860,20 @@ def main():
                      preset_override=args.preset,
                      max_age_days=max_age,
                      publish_mode=publish_mode)
+        return
+
+    # `medianame namecheck [<path>]` — read-only library audit
+    if args.title and args.title[0].lower() == "namecheck":
+        _load_config()
+        nc_path = " ".join(args.title[1:]) if len(args.title) > 1 else None
+        process_namecheck(path=nc_path)
+        return
+
+    # `medianame healthcheck` — environment diagnostics
+    if args.title and args.title[0].lower() == "healthcheck":
+        # Don't force setup — healthcheck should also help users diagnose
+        # a missing or broken config.
+        process_healthcheck()
         return
 
     # `medianame publish [<path>]`
