@@ -172,7 +172,7 @@ class TestMovieFix(unittest.TestCase):
         self.assertEqual(len(self._get_created_folders()), 0)
 
     def test_year_n_a_handling(self):
-        """Year 'N/A' from OMDb is handled (no / in path)."""
+        """Year 'N/A' from TMDB is handled (no / in path)."""
         medianame.INPUT_FILE = self._create_input_file(["tt0133093"])
         mock_response = {
             "Response": "True",
@@ -566,43 +566,31 @@ class TestMovieFix(unittest.TestCase):
             result = medianame._prompt_seasons(known_seasons=None)
         self.assertEqual(result, 1)
 
-    # --- get_movie_data retry and cache ---
+    # --- get_movie_data (TMDB-backed) cache + error handling ---
 
     def test_get_movie_data_uses_cache(self):
         """Second call with same id returns cached result without HTTP."""
         medianame._movie_cache["tt1234567"] = {"Response": "True", "Title": "Cached"}
-        with patch("medianame.requests.get") as mock_get:
+        with patch("medianame.get_tmdb_id_from_imdb") as mock_find:
             result = medianame.get_movie_data("tt1234567")
-        mock_get.assert_not_called()
+        mock_find.assert_not_called()
         self.assertEqual(result["Title"], "Cached")
 
-    def test_get_movie_data_retries_on_network_error(self):
-        """Transient network errors trigger retries until success."""
-        call_count = {"n": 0}
-
-        class MockResponse:
-            def json(self):
-                return {"Response": "True", "Title": "OK", "Year": "2020"}
-
-        def flaky_get(*args, **kwargs):
-            call_count["n"] += 1
-            if call_count["n"] < 3:
-                raise Exception("transient")
-            return MockResponse()
-
-        with patch("medianame.requests.get", side_effect=flaky_get):
-            with patch("medianame.time.sleep"):
-                result = medianame.get_movie_data("tt9999001")
-        self.assertEqual(call_count["n"], 3)
+    def test_get_movie_data_no_tmdb_match(self):
+        """IMDb id with no TMDB counterpart → Response False (not a crash)."""
+        with patch("medianame.get_tmdb_id_from_imdb", return_value=None):
+            result = medianame.get_movie_data("tt9999002")
         self.assertIsNotNone(result)
-        self.assertEqual(result["Title"], "OK")
+        self.assertEqual(result["Response"], "False")
+        self.assertIn("No TMDB match", result["Error"])
 
-    def test_get_movie_data_all_retries_fail(self):
-        """All retries fail → returns None."""
-        with patch("medianame.requests.get", side_effect=Exception("down")):
-            with patch("medianame.time.sleep"):
-                result = medianame.get_movie_data("tt9999002")
-        self.assertIsNone(result)
+    def test_get_movie_data_tmdb_find_error(self):
+        """Network error during /find → Response False (not a crash)."""
+        with patch("medianame.get_tmdb_id_from_imdb",
+                   side_effect=Exception("down")):
+            result = medianame.get_movie_data("tt9999003")
+        self.assertEqual(result["Response"], "False")
+        self.assertIn("TMDB find failed", result["Error"])
 
     # --- search_by_title Stage 2 (numbered list) ---
 
@@ -2026,6 +2014,75 @@ class TestPublishFeature(unittest.TestCase):
         self.assertEqual(len(predicted), 1)
         self.assertEqual(predicted[0]["match"], "rename")
         self.assertEqual(predicted[0]["existing_name"], "Send Help")
+
+
+class TestEndToEndScanPublish(unittest.TestCase):
+    """
+    End-to-end integration test: raw file in staging → scan → publish →
+    lands in library. TMDB is mocked; filesystem operations are real.
+    Guards the wiring between scan_source, build_scan_plan,
+    execute_scan_plan, and _publish_after_scan.
+    """
+
+    def setUp(self):
+        self.staging = tempfile.mkdtemp()
+        self.library = tempfile.mkdtemp()
+        self._orig = {
+            "MOVIE_PATH": medianame.MOVIE_PATH,
+            "SERIES_PATH": medianame.SERIES_PATH,
+            "MOVIE_LIBRARY_PATH": medianame.MOVIE_LIBRARY_PATH,
+            "SERIES_LIBRARY_PATH": medianame.SERIES_LIBRARY_PATH,
+            "NAMING_PRESET": medianame.NAMING_PRESET,
+            "DEFAULT_OPERATION": medianame.DEFAULT_OPERATION,
+        }
+        medianame.MOVIE_PATH = self.staging
+        medianame.SERIES_PATH = self.staging
+        medianame.MOVIE_LIBRARY_PATH = self.library
+        medianame.SERIES_LIBRARY_PATH = ""
+        medianame.NAMING_PRESET = "plex"
+        medianame.DEFAULT_OPERATION = "move"
+        medianame._movie_cache.clear()
+        medianame._tmdb_cache.clear()
+
+    def tearDown(self):
+        for k, v in self._orig.items():
+            setattr(medianame, k, v)
+        shutil.rmtree(self.staging, ignore_errors=True)
+        shutil.rmtree(self.library, ignore_errors=True)
+
+    def test_scan_then_publish_moves_file_into_library(self):
+        # Raw movie file in staging
+        raw = os.path.join(self.staging, "Inception.2010.1080p.BluRay-GROUP.mkv")
+        with open(raw, "wb") as f:
+            f.seek(medianame.MIN_VIDEO_BYTES)
+            f.write(b"\0")
+
+        tmdb_data = {
+            "Response": "True",
+            "Title": "Inception",
+            "Year": "2010",
+            "imdbID": "tt1375666",
+        }
+
+        with patch("medianame.search_by_title",
+                   return_value=("tt1375666", "movie", None)), \
+             patch("medianame.get_movie_data", return_value=tmdb_data), \
+             patch("builtins.input", return_value=""):
+            medianame.process_scan(source_path=self.staging,
+                                    operation="move",
+                                    publish_mode="auto")
+
+        expected_folder = "Inception (2010) {imdb-tt1375666}"
+        library_folder = os.path.join(self.library, expected_folder)
+        self.assertTrue(os.path.isdir(library_folder),
+                        f"Expected published folder at {library_folder}")
+        self.assertTrue(os.path.isfile(
+            os.path.join(library_folder,
+                         "Inception.2010.1080p.BluRay-GROUP.mkv")))
+        # Staging no longer holds the raw file or the intermediate folder
+        self.assertFalse(os.path.exists(raw))
+        self.assertFalse(os.path.exists(
+            os.path.join(self.staging, expected_folder)))
 
 
 if __name__ == "__main__":

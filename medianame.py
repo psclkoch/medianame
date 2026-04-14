@@ -1,8 +1,8 @@
 """
 Create Plex- or Jellyfin-compatible folders from IMDb links / TMDB.
 
-Reads a text file with IMDb URLs (or tt-IDs), queries the OMDb API for
-title and year, and creates media-server-compatible folders.
+Reads a text file with IMDb URLs (or tt-IDs) and resolves each via the
+TMDB API to title and year, then creates media-server-compatible folders.
 
 Plex preset:
     MovieTitle (Year) {imdb-ttXXXXXXX}
@@ -27,11 +27,11 @@ Usage:
                                      # cleaned up automatically.
     medianame scan --copy <path>     # Scan and copy instead of move
     medianame scan --max-age-days N  # Restrict scan to entries from the last N days
-    medianame scan --no-publish      # Skip the publish step for this run
+    medianame scan --no-publish      # Disable auto-publish for this run
     medianame publish [<path>]       # Move tag-named folders from the working
                                      # paths into the configured Plex/Jellyfin
-                                     # library (setup steps 12/13).
-    medianame setup                  # (Re)configure API keys, paths, preset
+                                     # library (setup steps 11/12).
+    medianame setup                  # (Re)configure API token, paths, preset
     # When the input file is empty, prompt mode starts automatically.
 """
 
@@ -74,9 +74,8 @@ SCAN_IGNORE = set(DEFAULT_SCAN_IGNORE)
 _LIBRARY_TAG_RE = re.compile(r"\{(?:imdb|tmdb)-[^}]+\}|\[(?:imdbid|tmdbid)-[^\]]+\]")
 
 
-# --- Configuration (loaded at startup from ~/.config/plexname/config.json) ---
+# --- Configuration (loaded at startup from ~/.config/medianame/config.json) ---
 
-API_KEY = None
 TMDB_TOKEN = None
 MOVIE_PATH = None
 SERIES_PATH = None
@@ -89,9 +88,6 @@ SERIES_ID_SOURCE = "tmdb"     # "imdb" | "tmdb"  (only used when preset=jellyfin
 DEFAULT_OPERATION = "move"    # "move" | "copy"  (for `medianame scan`)
 
 
-MAX_RETRIES = 3
-RETRY_DELAY = 2  # seconds between retries
-
 # Cache for fetched data (avoids duplicate API calls)
 _movie_cache = {}
 _tmdb_cache = {}
@@ -99,35 +95,54 @@ _tmdb_cache = {}
 
 def get_movie_data(imdb_id):
     """
-    Fetch movie data from the OMDb API (with retry on transient errors).
+    Fetch movie data for an IMDb ID using TMDB.
 
-    Args:
-        imdb_id: IMDb ID (e.g. tt0133093)
+    Resolves IMDb → TMDB via `/find`, then fetches full details via
+    `/movie/{id}`. Returns a dict in the historical shape expected by
+    the rest of the module:
 
-    Returns:
-        dict with Title, Year etc. on success, None otherwise.
+        {"Response": "True"|"False",
+         "Title": str, "Year": str, "Actors": str, "imdbID": str,
+         "Error": str (only on failure)}
+
+    Results are cached in `_movie_cache` (keyed by IMDb ID).
     """
     if imdb_id in _movie_cache:
         return _movie_cache[imdb_id]
-    url = f"https://www.omdbapi.com/?i={imdb_id}&apikey={API_KEY}"
-    last_error = None
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            response = requests.get(url, timeout=10)
-            data = response.json()
-            if data.get("Response") in ("True", "False"):
-                return data
-            last_error = data.get("Error", "Unknown API error")
-            break
-        except Exception as e:
-            last_error = str(e)
-            if attempt < MAX_RETRIES:
-                print(f"  ⚠️ Attempt {attempt}/{MAX_RETRIES} failed, retrying in {RETRY_DELAY}s...")
-                time.sleep(RETRY_DELAY)
-            else:
-                print(f"Error for {imdb_id} after {MAX_RETRIES} attempts: {last_error}")
-                return None
-    return None
+    try:
+        tmdb_id = get_tmdb_id_from_imdb(imdb_id, "movie")
+    except Exception as e:
+        return {"Response": "False", "Error": f"TMDB find failed: {e}"}
+    if not tmdb_id:
+        return {"Response": "False",
+                "Error": f"No TMDB match for IMDb ID {imdb_id}"}
+    details = get_tmdb_details(tmdb_id, "movie")
+    if not details or details.get("Response") != "True":
+        return {"Response": "False",
+                "Error": f"TMDB details lookup failed for {imdb_id}"}
+    # get_tmdb_details() already populates _movie_cache for movies by
+    # their IMDb ID, but only when TMDB actually returned one. Make sure
+    # the caller-provided id is also cached so repeat lookups are free.
+    _movie_cache[imdb_id] = details
+    return details
+
+
+_INVALID_PATH_CHARS_RE = re.compile(r'[<>:"/\\|?*]')
+
+
+def _sanitize_title_year(title, year):
+    """
+    Strip filesystem-invalid characters from a title and collapse
+    year ranges (e.g. "1999–2000") to the starting year.
+
+    Returns:
+        (clean_title, clean_year) tuple. clean_year falls back to "0000"
+        when empty.
+    """
+    clean_title = _INVALID_PATH_CHARS_RE.sub("", title or "")
+    year_str = str(year or "").split("–")[0].split("-")[0].strip()
+    clean_year = _INVALID_PATH_CHARS_RE.sub("", year_str) or "0000"
+    return clean_title, clean_year
 
 
 def format_folder_name(title, year, id_type, id_value, preset="plex"):
@@ -647,15 +662,8 @@ def process_list(dry_run=False, interactive=False, output_path=None, input_file=
             target_path = movie_path
 
         if data and data.get("Response") == "True":
-            title = data["Title"]
-            year = data["Year"]
-
-            # Year range like "1999–2000" → use first year only
-            year = str(year).split("–")[0].split("-")[0].strip()
-
-            # Folder name: remove invalid characters (/:*?"<>|\ etc.)
-            clean_title = re.sub(r'[<>:"/\\|?*]', '', title)
-            clean_year = re.sub(r'[<>:"/\\|?*]', '', year) or "0000"
+            clean_title, clean_year = _sanitize_title_year(
+                data["Title"], data.get("Year", ""))
 
             # Decide ID tag based on preset + media type
             want_id_type = _resolve_naming(media_type, preset)
@@ -852,20 +860,6 @@ def _collect_media_files(path, max_depth=None):
 def _is_library_folder(name):
     """True if a folder name already carries a medianame ID tag."""
     return bool(_LIBRARY_TAG_RE.search(name))
-
-
-def _should_skip_scan_entry(name):
-    """
-    Decide whether to skip a top-level entry by name alone
-    (no filesystem access).
-    """
-    if name.startswith("."):
-        return True
-    if name.lower() in SCAN_IGNORE:
-        return True
-    if _is_library_folder(name):
-        return True
-    return False
 
 
 def scan_source(source_path, max_age_days=0):
@@ -1082,9 +1076,8 @@ def _resolve_scan_item(item, preset):
         print(f"  ❌ Could not fetch details for {entry_id}")
         return None
 
-    clean_title = re.sub(r'[<>:"/\\|?*]', '', data["Title"])
-    year = str(data.get("Year", "")).split("–")[0].split("-")[0].strip()
-    clean_year = re.sub(r'[<>:"/\\|?*]', '', year) or "0000"
+    clean_title, clean_year = _sanitize_title_year(
+        data["Title"], data.get("Year", ""))
 
     want_id_type = _resolve_naming(media_type, preset)
     id_value = _resolve_id_value(entry_id, media_type, want_id_type, data)
@@ -2428,13 +2421,12 @@ def _show_help():
 
 def _load_config():
     """Load configuration and set module globals."""
-    global API_KEY, TMDB_TOKEN, MOVIE_PATH, SERIES_PATH
+    global TMDB_TOKEN, MOVIE_PATH, SERIES_PATH
     global NAMING_PRESET, MOVIE_ID_SOURCE, SERIES_ID_SOURCE, DEFAULT_OPERATION
     global MIN_VIDEO_SIZE_MB, MIN_VIDEO_BYTES, SCAN_IGNORE
     global MOVIE_LIBRARY_PATH, SERIES_LIBRARY_PATH
     import config
     cfg = config.get_config()
-    API_KEY = cfg["omdb_api_key"]
     TMDB_TOKEN = cfg["tmdb_token"]
     MOVIE_PATH = cfg["movie_path"]
     SERIES_PATH = cfg["series_path"]

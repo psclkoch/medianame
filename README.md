@@ -72,19 +72,18 @@ Not configured yet. Starting setup...
 
 ℹ️ Press Enter at any prompt with a default in [brackets] to accept it.
 
-1) OMDb API Key (for movie lookups via IMDb ID)
-2) TMDB Read Access Token (for title search, TV shows, cast)
-3) Movie working folder (library root, or a staging area — see step 12)
-4) TV show working folder (library root, or a staging area — see step 13)
-5) Media server (plex / jellyfin)
-6) Movie ID source        (Jellyfin only — imdb / tmdb)
-7) TV show ID source      (Jellyfin only — imdb / tmdb)
-8) Default operation for `scan` (move / copy)
-9) Minimum video size for `scan` (in MB, default 500)
-10) Extra scan ignores (comma-separated; defaults cover #recycle, @eaDir, …)
-11) Default max age (days) for `scan` (0 = no limit)
-12) Movie library folder — optional Plex/Jellyfin target for `publish`
-13) TV show library folder — optional Plex/Jellyfin target for `publish`
+1) TMDB Read Access Token (for title search, movies, TV shows, cast)
+2) Movie working folder (library root, or a staging area — see step 11)
+3) TV show working folder (library root, or a staging area — see step 12)
+4) Media server (plex / jellyfin)
+5) Movie ID source        (Jellyfin only — imdb / tmdb)
+6) TV show ID source      (Jellyfin only — imdb / tmdb)
+7) Default operation for `scan` (move / copy)
+8) Minimum video size for `scan` (in MB, default 500)
+9) Extra scan ignores (comma-separated; defaults cover #recycle, @eaDir, …)
+10) Default max age (days) for `scan` (0 = no limit)
+11) Movie library folder — optional Plex/Jellyfin target for `publish`
+12) TV show library folder — optional Plex/Jellyfin target for `publish`
 
 ✅ Configuration saved: ~/.config/medianame/config.json
 ```
@@ -128,7 +127,7 @@ medianame scan --max-age-days 7 <path> # Only look at entries modified in the la
 
 What gets picked up:
 
-- **Videos** (`.mkv .mp4 .avi .m4v .mov`) — only files above the configured minimum size are kept, so samples, trailers, and extras are filtered out. The threshold defaults to 500 MB and can be changed in `medianame setup` (step 9).
+- **Videos** (`.mkv .mp4 .avi .m4v .mov`) — only files above the configured minimum size are kept, so samples, trailers, and extras are filtered out. The threshold defaults to 500 MB and can be changed in `medianame setup` (step 8).
 - **All subtitle files** (`.srt .ass .sub .idx .vtt`) — every language is preserved
 - Filenames are kept as-is; only the enclosing folder gets renamed
 - TV episodes land in `Season NN/` subfolders based on the parsed season number
@@ -140,11 +139,11 @@ What is **automatically skipped** so scans on large library volumes stay fast:
 
 - Folders that already carry a medianame ID tag (`{imdb-…}`, `{tmdb-…}`, `[imdbid-…]`, `[tmdbid-…]`) — they're assumed to be processed
 - OS / NAS metadata: `#recycle`, `@eaDir`, `.Trash`, `lost+found`, `System Volume Information`, `$RECYCLE.BIN`, `.DS_Store`, …
-- Anything you add as an extra ignore (setup step 10)
+- Anything you add as an extra ignore (setup step 9)
 - Subfolders deeper than 2 levels inside a scan item (scene releases never nest deeper)
-- Entries older than the configured max age, when set (setup step 11 or `--max-age-days N`)
+- Entries older than the configured max age, when set (setup step 10 or `--max-age-days N`)
 
-The default operation (`move` or `copy`) is set during `medianame setup` (step 8) and can be overridden per run with `--copy` / `--move`. The default max-age is step 11 and can be overridden with `--max-age-days`.
+The default operation (`move` or `copy`) is set during `medianame setup` (step 7) and can be overridden per run with `--copy` / `--move`. The default max-age is step 10 and can be overridden with `--max-age-days`.
 
 > **Note on title matching.** TMDB search is driven only by the parsed title; the parsed year is used to re-rank results (preferring the matching year, then ±1). Appending the year to the query string would confuse TMDB's multi-search and return zero hits for otherwise obvious titles.
 
@@ -154,8 +153,8 @@ If you keep a **separate working area** (where medianame creates folders) from y
 
 Configure it during `medianame setup`:
 
-- **Step 12** — Movie library folder (e.g. `/Volumes/Plex/Movies`)
-- **Step 13** — TV show library folder (e.g. `/Volumes/Plex/TV`)
+- **Step 11** — Movie library folder (e.g. `/Volumes/Plex/Movies`)
+- **Step 12** — TV show library folder (e.g. `/Volumes/Plex/TV`)
 
 Leave empty to disable. When at least one of them is set, every successful `medianame scan` runs an interactive publish step at the end (suppress with `--no-publish`, force with `--publish`). Or run it manually:
 
@@ -239,6 +238,7 @@ New config fields introduced in later versions fall back to sensible defaults �
 - v1.2.1 — `scan_ignore` (extra ignores on top of built-in defaults)
 - v1.2.2 — `scan_max_age_days`
 - v1.3.0 — `movie_library_path`, `series_library_path` (optional publish targets)
+- v1.4.0 — OMDb API is no longer used; the legacy `omdb_api_key` in existing configs is ignored and can be removed
 
 ### From plexname (v1.0)
 
@@ -253,18 +253,17 @@ pipx install -e .
 
 Your existing `~/.config/plexname/config.json` is **automatically migrated** to `~/.config/medianame/config.json` on first run. Plex naming is the default, so your existing folders continue to work without changes.
 
-## API keys
+## API key
 
-medianame uses two free APIs:
+medianame uses a single free API:
 
-- **[OMDb API](https://www.omdbapi.com/)** — for movie lookups by IMDb ID. Free tier: 1,000 requests/day.
-- **[TMDB API](https://www.themoviedb.org/documentation/api)** — for title search, TV show data, and cast info. Free for non-commercial use.
+- **[TMDB API](https://www.themoviedb.org/documentation/api)** — for title search, movie and TV show lookups (by title or IMDb ID), and cast info. Free for non-commercial use.
 
 ## Dependencies
 
 Runtime dependencies (installed automatically by `pip` / `pipx`):
 
-- **[requests](https://pypi.org/project/requests/)** — HTTP client for the OMDb and TMDB APIs (Apache 2.0)
+- **[requests](https://pypi.org/project/requests/)** — HTTP client for the TMDB API (Apache 2.0)
 - **[guessit](https://pypi.org/project/guessit/)** — parser for scene-style release filenames, used by `medianame scan` (LGPL-3.0; pure Python)
 
 ## License

@@ -19,7 +19,7 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 LEGACY_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "plexname")
 LEGACY_CONFIG_PATH = os.path.join(LEGACY_CONFIG_DIR, "config.json")
 
-REQUIRED_KEYS = ["omdb_api_key", "tmdb_token", "movie_path", "series_path"]
+REQUIRED_KEYS = ["tmdb_token", "movie_path", "series_path"]
 # naming_preset, movie_id_source, series_id_source are optional
 # (v1.0 configs default to plex).
 
@@ -91,58 +91,50 @@ def run_setup():
         print()
         print("ℹ️ Press Enter at any prompt with a default in [brackets] to accept it.")
 
-    # 1. OMDb API Key
+    # 1. TMDB Token
     print()
-    print("1) OMDb API Key (for movie lookups via IMDb ID)")
-    print("   Get a free key: https://www.omdbapi.com/apikey.aspx")
-    print("   → Choose 'FREE', enter your email, key arrives by mail.")
-    default = existing.get("omdb_api_key", "")
-    omdb_key = _prompt_value("   API Key", default)
-
-    # 2. TMDB Token
-    print()
-    print("2) TMDB Read Access Token (for title search, TV shows, cast)")
+    print("1) TMDB Read Access Token (for title search, TV shows, cast)")
     print("   Create account: https://www.themoviedb.org/signup")
     print("   Get token: https://www.themoviedb.org/settings/api")
     print("   → Copy the long 'API Read Access Token' (not the short API key).")
     default = existing.get("tmdb_token", "")
     tmdb_token = _prompt_value("   Token", default)
 
-    # 3. Movie path
+    # 2. Movie path
     print()
-    print("3) Movie working folder")
+    print("2) Movie working folder")
     print("   Where new movie folders are created by medianame, and where")
     print("   `medianame scan` looks for raw downloads to process.")
     print("   This can either be your Plex/Jellyfin library root directly,")
     print("   or a separate staging area — if you prefer to review folders")
     print("   before they land in Plex, set a staging path here and configure")
-    print("   the actual library under step 12 (then `publish` moves things")
+    print("   the actual library under step 11 (then `publish` moves things")
     print("   over for you).")
     print("   Example: /Volumes/NAS/Movies  or  ~/Downloads/staging/movies")
     default = existing.get("movie_path", "")
     movie_path = _prompt_value("   Path", default)
 
-    # 4. Series path
+    # 3. Series path
     print()
-    print("4) TV show working folder")
-    print("   Same purpose as step 3, but for series. Either your library")
-    print("   root or a staging area (with the real library set in step 13).")
+    print("3) TV show working folder")
+    print("   Same purpose as step 2, but for series. Either your library")
+    print("   root or a staging area (with the real library set in step 12).")
     print("   Example: /Volumes/NAS/TV  or  ~/Downloads/staging/tv")
     default = existing.get("series_path", "")
     series_path = _prompt_value("   Path", default)
 
-    # 5. Naming preset
+    # 4. Naming preset
     print()
-    print("5) Media server (determines folder naming convention)")
+    print("4) Media server (determines folder naming convention)")
     print("   plex     → \"Title (Year) {imdb-ttXXX}\"  /  \"Title (Year) {tmdb-XXX}\"")
     print("   jellyfin → \"Title (Year) [imdbid-ttXXX]\" / \"Title (Year) [tmdbid-XXX]\"")
     default_preset = existing.get("naming_preset", "plex")
     preset = _prompt_choice("   Preset (plex/jellyfin)", ["plex", "jellyfin"], default_preset)
 
-    # 6. + 7. ID source (only matters for Jellyfin — Plex is fixed)
+    # 5. + 6. ID source (only matters for Jellyfin — Plex is fixed)
     if preset == "jellyfin":
         print()
-        print("6) Movie ID source")
+        print("5) Movie ID source")
         print("   imdb → use IMDb IDs for movies (default, recommended)")
         print("   tmdb → use TMDB IDs for movies")
         default_movie_source = existing.get("movie_id_source", "imdb")
@@ -150,7 +142,7 @@ def run_setup():
                                           ["imdb", "tmdb"], default_movie_source)
 
         print()
-        print("7) TV show ID source")
+        print("6) TV show ID source")
         print("   tmdb → use TMDB IDs for TV shows (default, recommended)")
         print("   imdb → use IMDb IDs for TV shows")
         default_series_source = existing.get("series_id_source", "tmdb")
@@ -161,28 +153,28 @@ def run_setup():
         movie_id_source = "imdb"
         series_id_source = "tmdb"
 
-    # 8. Default operation for `medianame scan`
+    # 7. Default operation for `medianame scan`
     print()
-    print("8) Default operation for `medianame scan`")
+    print("7) Default operation for `medianame scan`")
     print("   move → move files into the library folders (source is emptied)")
     print("   copy → copy files (source is preserved)")
     default_operation = existing.get("default_operation", "move")
     default_operation = _prompt_choice("   Operation (move/copy)",
                                         ["move", "copy"], default_operation)
 
-    # 9. Minimum video file size for scan
+    # 8. Minimum video file size for scan
     print()
-    print("9) Minimum video size for `medianame scan` (in MB)")
+    print("8) Minimum video size for `medianame scan` (in MB)")
     print("   Files below this size are ignored — filters out samples,")
     print("   trailers, and extras. 500 MB is a sensible default.")
     default_min_mb = int(existing.get("min_video_size_mb", 500))
     min_video_size_mb = _prompt_int("   Minimum size (MB)", default_min_mb,
                                      minimum=0)
 
-    # 10. Extra scan ignore entries (added to the built-in defaults like
-    #     #recycle, @eaDir, .Trash, System Volume Information, …)
+    # 9. Extra scan ignore entries (added to the built-in defaults like
+    #    #recycle, @eaDir, .Trash, System Volume Information, …)
     print()
-    print("10) Extra folders/files to ignore during `scan`")
+    print("9) Extra folders/files to ignore during `scan`")
     print("    Top-level entries matching these names are skipped entirely.")
     print("    Defaults already cover: #recycle, @eaDir, .Trash, lost+found,")
     print("    System Volume Information, $RECYCLE.BIN.")
@@ -196,9 +188,9 @@ def run_setup():
     else:
         scan_ignore = [p.strip() for p in raw.split(",") if p.strip()]
 
-    # 11. Default max age (days) for `scan`
+    # 10. Default max age (days) for `scan`
     print()
-    print("11) Default maximum age for `scan` entries (in days)")
+    print("10) Default maximum age for `scan` entries (in days)")
     print("    0 = no limit (process every matching entry, regardless of mtime).")
     print("    Any positive number restricts scans to entries modified within")
     print("    the last N days — useful if you drop new downloads into an")
@@ -207,9 +199,9 @@ def run_setup():
     scan_max_age_days = _prompt_int("    Max age (days, 0 = disabled)",
                                      default_max_age, minimum=0)
 
-    # 12. + 13. Optional library paths — enables the `publish` step.
+    # 11. + 12. Optional library paths — enables the `publish` step.
     print()
-    print("12) Movie library folder (OPTIONAL — leave empty to disable publish)")
+    print("11) Movie library folder (OPTIONAL — leave empty to disable publish)")
     print("    If set, newly created movie folders (and existing ones via")
     print("    `medianame publish`) are moved from the movie folder above into")
     print("    this library — typically your Plex/Jellyfin root.")
@@ -218,13 +210,12 @@ def run_setup():
     movie_library_path = _prompt_optional("    Path", default)
 
     print()
-    print("13) TV show library folder (OPTIONAL — leave empty to disable publish)")
+    print("12) TV show library folder (OPTIONAL — leave empty to disable publish)")
     print("    Same as above, but for series.")
     default = existing.get("series_library_path", "") or ""
     series_library_path = _prompt_optional("    Path", default)
 
     cfg = {
-        "omdb_api_key": omdb_key,
         "tmdb_token": tmdb_token,
         "movie_path": movie_path,
         "series_path": series_path,
