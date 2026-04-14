@@ -37,7 +37,9 @@ import requests
 
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".m4v", ".mov"}
 SUBTITLE_EXTENSIONS = {".srt", ".ass", ".sub", ".idx", ".vtt"}
-MIN_VIDEO_BYTES = 500 * 1024 * 1024  # 500 MB — filters out samples, extras, trailers
+# Minimum video size for `scan`. Overridden from config at runtime.
+MIN_VIDEO_SIZE_MB = 500
+MIN_VIDEO_BYTES = MIN_VIDEO_SIZE_MB * 1024 * 1024
 
 
 # --- Configuration (loaded at startup from ~/.config/plexname/config.json) ---
@@ -1138,6 +1140,7 @@ def _load_config():
     """Load configuration and set module globals."""
     global API_KEY, TMDB_TOKEN, MOVIE_PATH, SERIES_PATH
     global NAMING_PRESET, MOVIE_ID_SOURCE, SERIES_ID_SOURCE, DEFAULT_OPERATION
+    global MIN_VIDEO_SIZE_MB, MIN_VIDEO_BYTES
     import config
     cfg = config.get_config()
     API_KEY = cfg["omdb_api_key"]
@@ -1149,6 +1152,8 @@ def _load_config():
     MOVIE_ID_SOURCE = cfg.get("movie_id_source", "imdb")
     SERIES_ID_SOURCE = cfg.get("series_id_source", "tmdb")
     DEFAULT_OPERATION = cfg.get("default_operation", "move")
+    MIN_VIDEO_SIZE_MB = int(cfg.get("min_video_size_mb", 500))
+    MIN_VIDEO_BYTES = MIN_VIDEO_SIZE_MB * 1024 * 1024
 
 
 def main():

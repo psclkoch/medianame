@@ -75,8 +75,10 @@ Not configured yet. Starting setup...
 3) Movie folder (root of your movie library)
 4) TV show folder (root of your series library)
 5) Media server (plex / jellyfin)
-6) Movie ID source (only for Jellyfin: imdb / tmdb)
-7) TV show ID source (only for Jellyfin: imdb / tmdb)
+6) Movie ID source        (Jellyfin only — imdb / tmdb)
+7) TV show ID source      (Jellyfin only — imdb / tmdb)
+8) Default operation for `scan` (move / copy)
+9) Minimum video size for `scan` (in MB, default 500)
 
 ✅ Configuration saved: ~/.config/medianame/config.json
 ```
@@ -110,13 +112,13 @@ medianame scan --copy <path>     # Keep the source (default is move)
 
 What gets picked up:
 
-- **Videos** (`.mkv .mp4 .avi .m4v .mov`) of at least 500 MB — samples, trailers, extras are filtered out
+- **Videos** (`.mkv .mp4 .avi .m4v .mov`) — only files above the configured minimum size are kept, so samples, trailers, and extras are filtered out. The threshold defaults to 500 MB and can be changed in `medianame setup` (step 9).
 - **All subtitle files** (`.srt .ass .sub .idx .vtt`) — every language is preserved
 - Filenames are kept as-is; only the enclosing folder gets renamed
 - TV episodes land in `Season NN/` subfolders based on the parsed season number
 - If a destination file already exists, you're prompted per conflict: skip / overwrite / abort
 
-The default operation (`move` or `copy`) is set during `medianame setup` and can be overridden per run with `--copy` / `--move`.
+The default operation (`move` or `copy`) is set during `medianame setup` (step 8) and can be overridden per run with `--copy` / `--move`.
 
 ### Input formats
 
@@ -156,13 +158,25 @@ Successfully processed entries are automatically removed from the file (a `.bak`
 5. When Jellyfin + IMDb TV IDs are requested, `external_ids` on TMDB provides the IMDb ID
 6. Folders are created directly in your configured library paths
 
-## Upgrading from plexname (v1.0)
+## Upgrading
+
+### From an earlier medianame release
+
+```bash
+cd ~/Desktop/IMDB   # or wherever your clone lives
+git pull
+pipx install -e . --force     # --force picks up new dependencies
+```
+
+New config fields introduced in later versions (e.g. `default_operation` and `min_video_size_mb` in v1.2.0) fall back to sensible defaults — your existing config continues to work. Run `medianame setup` to adjust them interactively.
+
+### From plexname (v1.0)
 
 medianame v1.1 is the renamed successor of plexname v1.0. If you had v1.0 installed:
 
 ```bash
 pipx uninstall plexname
-cd ~/Desktop/IMDB   # or wherever your clone lives
+cd ~/Desktop/IMDB
 git pull
 pipx install -e .
 ```

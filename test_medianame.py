@@ -1087,6 +1087,19 @@ class TestScanFeature(unittest.TestCase):
         self._write_file(f, 1024)
         self.assertIsNone(medianame._classify_media_file(f))
 
+    def test_classify_threshold_is_configurable(self):
+        """Adjusting MIN_VIDEO_BYTES at runtime changes what qualifies."""
+        f = os.path.join(self.source_dir, "medium.mkv")
+        self._write_file(f, 10 * 1024 * 1024)  # 10 MB
+        original = medianame.MIN_VIDEO_BYTES
+        try:
+            medianame.MIN_VIDEO_BYTES = 5 * 1024 * 1024  # lower to 5 MB
+            self.assertEqual(medianame._classify_media_file(f), "video")
+            medianame.MIN_VIDEO_BYTES = 50 * 1024 * 1024  # raise to 50 MB
+            self.assertIsNone(medianame._classify_media_file(f))
+        finally:
+            medianame.MIN_VIDEO_BYTES = original
+
     def test_classify_subtitle_any_size(self):
         f = os.path.join(self.source_dir, "movie.en.srt")
         self._write_file(f, 100)

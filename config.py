@@ -154,6 +154,15 @@ def run_setup():
     default_operation = _prompt_choice("   Operation (move/copy)",
                                         ["move", "copy"], default_operation)
 
+    # 9. Minimum video file size for scan
+    print()
+    print("9) Minimum video size for `medianame scan` (in MB)")
+    print("   Files below this size are ignored — filters out samples,")
+    print("   trailers, and extras. 500 MB is a sensible default.")
+    default_min_mb = int(existing.get("min_video_size_mb", 500))
+    min_video_size_mb = _prompt_int("   Minimum size (MB)", default_min_mb,
+                                     minimum=0)
+
     cfg = {
         "omdb_api_key": omdb_key,
         "tmdb_token": tmdb_token,
@@ -163,6 +172,7 @@ def run_setup():
         "movie_id_source": movie_id_source,
         "series_id_source": series_id_source,
         "default_operation": default_operation,
+        "min_video_size_mb": min_video_size_mb,
     }
 
     save_config(cfg)
@@ -199,6 +209,23 @@ def _prompt_value(label, default=""):
             if entry:
                 return entry
             print("   Input required.")
+
+
+def _prompt_int(label, default, minimum=0):
+    """Prompt for a positive integer. Empty input → default."""
+    while True:
+        entry = input(f"{label} [{default}]: ").strip()
+        if not entry:
+            return default
+        try:
+            value = int(entry)
+        except ValueError:
+            print("   Please enter a whole number.")
+            continue
+        if value < minimum:
+            print(f"   Value must be >= {minimum}.")
+            continue
+        return value
 
 
 def _prompt_choice(label, choices, default):
